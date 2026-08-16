@@ -266,8 +266,9 @@ const String storageLocationName = 'OneDrive';
 /// repository layer knows which cloud it is talking to. Keeping that seam is
 /// what turned the last backend change into a contained edit rather than a
 /// rewrite; don't let a screen or notifier reach past it.
-final oneDriveServiceProvider =
-    Provider<OneDriveExcelService>((ref) => OneDriveExcelService());
+final oneDriveServiceProvider = Provider<OneDriveExcelService>(
+  (ref) => OneDriveExcelService(prefsLoader: SharedPreferences.getInstance),
+);
 
 /// Row-level workbook access for repositories.
 final workbookStoreProvider = Provider<WorkbookStore>(

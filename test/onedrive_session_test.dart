@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:success_erp/app.dart';
@@ -30,14 +33,25 @@ void main() {
               '$scheme://auth?code=CODE'
               '&state=${Uri.parse(url).queryParameters['state']}',
         ),
+        prefsLoader: SharedPreferences.getInstance,
       );
 
   setUp(() {
+    // These tests drive sign-in as a phone would, and the test host is a
+    // desktop — which now gets the loopback flow instead of the custom-scheme
+    // one. Pin the platform so the mobile path (and its interactiveSignIn
+    // fake) is what runs.
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
     graph = FakeGraph();
     graph.seedExistingWorkbook({
       for (final t in WorkbookSchema.tableNames) t: WorkbookSchema.headersOf(t),
     });
     secrets = InMemorySecretStore();
+    SharedPreferences.setMockInitialValues({});
+  });
+
+  tearDown(() {
+    debugDefaultTargetPlatformOverride = null;
   });
 
   group('OneDrive session persistence (AGENTS.md §9)', () {
@@ -93,12 +107,11 @@ void main() {
             reason: 'launch $launch fell back to Sign-In');
         expect(service.isReady, isTrue,
             reason: 'launch $launch reported ready without a prepared store');
-        // The workbook was actually located and its tables reconciled.
-        expect(
-          graph.requestLog,
-          contains('GET /me/drive/special/approot:/ERP_App_Data.xlsx'),
-          reason: 'launch $launch never looked for the workbook',
-        );
+        // The layout was restored from the local cache — no Graph verification
+        // round-trips at all (only the silent token refresh ran).
+        expect(graph.requestLog, isEmpty,
+            reason: 'launch $launch re-verified the workbook instead of '
+                'using the cached layout');
       }
 
       // Each launch refreshed the access token silently — no interactive prompt.
@@ -196,6 +209,100 @@ void main() {
 
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getBool('session_established'), isNull);
+    });
+  });
+
+  group('store layout cache', () {
+    setUp(() {
+      graph = FakeGraph();
+      graph.seedExistingWorkbook({
+        for (final t in WorkbookSchema.tableNames)
+          t: WorkbookSchema.headersOf(t),
+      });
+      secrets = InMemorySecretStore({'ms_refresh_token': 'STORED'});
+      SharedPreferences.setMockInitialValues({});
+    });
+
+    test('a cache hit makes zero Graph calls on the wire', () async {
+      final first = coldStart();
+      expect(await first.restoreSession(), isTrue);
+      expect(graph.requestLog, isNotEmpty,
+          reason: 'the first run must do the full verification');
+
+      // Second launch: cache hit. Only the silent token refresh happens, which
+      // is not a Graph workbook/table call and is not logged.
+      graph.requestLog.clear();
+      final second = coldStart();
+      expect(await second.restoreSession(), isTrue);
+      expect(second.isReady, isTrue);
+      expect(graph.requestLog, isEmpty,
+          reason: 'a cache hit must skip _ensureWorkbook/_ensureTables');
+      expect(
+        second.headersFor('Customers'),
+        WorkbookSchema.headersOf('Customers'),
+      );
+    });
+
+    test('a different schema version forces full verification', () async {
+      await coldStart().restoreSession();
+      graph.requestLog.clear();
+
+      // A newer build that changed the schema must not trust the old layout.
+      SharedPreferences.setMockInitialValues({
+        OneDriveExcelService.storeCacheKey: jsonEncode({
+          'schemaVersion': WorkbookSchema.version + 1,
+          'itemId': FakeGraph.itemId,
+          'headers': {
+            for (final t in WorkbookSchema.tableNames)
+              t: WorkbookSchema.headersOf(t),
+          },
+        }),
+      });
+
+      await coldStart().restoreSession();
+      expect(
+        graph.requestLog,
+        contains('GET /me/drive/special/approot:/ERP_App_Data.xlsx'),
+        reason: 'a schema change must re-verify instead of using the cache',
+      );
+    });
+
+    test('a Graph 404 during normal use invalidates the cached layout',
+        () async {
+      final first = coldStart();
+      await first.restoreSession();
+      expect(graph.requestLog, isNotEmpty);
+
+      graph.requestLog.clear();
+      await coldStart().restoreSession();
+      expect(graph.requestLog, isEmpty, reason: 'cache hit');
+
+      // The workbook was deleted elsewhere; OneDrive answers the next store
+      // call with 404, which must clear the stale cache rather than keep
+      // trusting it.
+      graph.notFoundNextCalls = 1;
+      await expectLater(
+        first.getAllRows('Customers'),
+        throwsA(isA<StorageUnavailableException>()),
+      );
+
+      graph.requestLog.clear();
+      await coldStart().restoreSession();
+      expect(
+        graph.requestLog,
+        contains('GET /me/drive/special/approot:/ERP_App_Data.xlsx'),
+        reason: 'after a 404 the next restore must verify from scratch',
+      );
+    });
+
+    test('no cached layout falls back to full verification', () async {
+      final service = coldStart();
+      await service.restoreSession();
+      expect(
+        graph.requestLog,
+        contains('GET /me/drive/special/approot:/ERP_App_Data.xlsx'),
+      );
+      expect(service.isReady, isTrue);
     });
   });
 

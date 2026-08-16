@@ -34,15 +34,23 @@ See AGENTS.md §2 and §12.
    *Accounts in any organizational directory and personal Microsoft accounts*
    (this matches the `common` tenant the app uses).
 3. **Register**, then go to **Authentication** → **Add a platform** →
-   **Mobile and desktop applications** → **Custom redirect URI**:
+   **Mobile and desktop applications** → **Custom redirect URI**. Under a
+   single platform entry add **both** of these:
 
    ```
-   msauth.com.example.successerp://auth
+   successerp://auth
+   http://localhost
    ```
 
-   This string must match `MicrosoftAuth.redirectUri` and the
-   `<data android:scheme>` in `android/app/src/main/AndroidManifest.xml`
-   exactly. Note there is **no underscore** — a URI scheme cannot contain one.
+   - `successerp://auth` is the mobile (Android/iOS) redirect — it must match
+     `MicrosoftAuth.redirectUri` and the `<data android:scheme>` in
+     `android/app/src/main/AndroidManifest.xml` exactly. Note there is **no
+     underscore** — a URI scheme cannot contain one.
+   - `http://localhost` (no port) covers desktop sign-in. On Linux/Windows/macOS
+     the app signs you in through your default browser and redirects to a local
+     loopback server on a random free port; the Microsoft identity platform
+     matches loopback redirects to `http://localhost` regardless of port, so
+     this single entry covers every port the app might pick.
 4. Confirm **Allow public client flows** is enabled (Authentication → Advanced
    settings). The app is a public client and uses PKCE, with no secret.
 5. **API permissions** → **Microsoft Graph** → *Delegated* →

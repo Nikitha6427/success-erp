@@ -56,6 +56,10 @@ class FakeGraph {
   /// Fails the next N Graph calls with a 500.
   int failNextCalls = 0;
 
+  /// Answers the next N Graph calls with a 404 — e.g. the workbook was deleted
+  /// or moved outside the app.
+  int notFoundNextCalls = 0;
+
   /// Worksheet names present in the workbook.
   final Set<String> worksheets = {};
 
@@ -70,6 +74,10 @@ class FakeGraph {
 
   int tokenRequests = 0;
   int accessTokenSerial = 0;
+
+  /// Form bodies of every token-endpoint call, for asserting what the auth code
+  /// exchange sent (notably the loopback redirect_uri).
+  final List<Map<String, String>> tokenBodies = [];
 
   /// Seeds a workbook that already has every table, as a returning user's would.
   void seedExistingWorkbook(Map<String, List<String>> headersByTable) {
@@ -102,6 +110,11 @@ class FakeGraph {
         429,
         headers: {'retry-after': '$retryAfterSeconds'},
       );
+    }
+
+    if (notFoundNextCalls > 0) {
+      notFoundNextCalls--;
+      return http.Response('{"error":{"message":"gone"}}', 404);
     }
 
     // ── Workbook item ────────────────────────────────────────────────────
@@ -223,6 +236,7 @@ class FakeGraph {
   Future<http.Response> _token(http.Request request) async {
     tokenRequests++;
     final form = Uri.splitQueryString(request.body);
+    tokenBodies.add(form);
     if (form['grant_type'] == 'refresh_token' && !refreshTokenValid) {
       return http.Response('{"error":"invalid_grant"}', 400);
     }

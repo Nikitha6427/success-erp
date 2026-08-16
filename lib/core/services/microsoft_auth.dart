@@ -1,10 +1,15 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as dev;
+import 'dart:io';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../exceptions/storage_unavailable_exception.dart';
 import 'secret_store.dart';
@@ -101,6 +106,15 @@ static const String redirectUri = '$redirectScheme://auth';
   final Future<String> Function(String url, String callbackScheme)
       _interactiveSignIn;
 
+  /// Opens an external URL in the system's default browser. Injectable so the
+  /// desktop loopback flow can be tested without launching a real browser;
+  /// production uses `url_launcher`.
+  final Future<void> Function(Uri url) _openBrowser;
+
+  /// How long the desktop flow waits for the browser callback before giving up.
+  /// Overridable so the timeout path is testable without a three-minute wait.
+  final Duration loopbackTimeout;
+
   /// The client id this instance uses. Defaults to the build-time value;
   /// overridable so tests don't need a real registration.
   final String clientId;
@@ -110,10 +124,13 @@ static const String redirectUri = '$redirectScheme://auth';
     SecretStore? secrets,
     Future<String> Function(String url, String callbackScheme)?
         interactiveSignIn,
+    Future<void> Function(Uri url)? openBrowser,
+    this.loopbackTimeout = const Duration(minutes: 3),
     String? clientId,
   })  : _http = httpClient ?? http.Client(),
         _secrets = secrets ?? const SecureSecretStore(),
         _interactiveSignIn = interactiveSignIn ?? _webAuth,
+        _openBrowser = openBrowser ?? _launchExternal,
         clientId = clientId ?? buildTimeClientId;
 
   static Future<String> _webAuth(String url, String callbackScheme) =>
@@ -121,6 +138,9 @@ static const String redirectUri = '$redirectScheme://auth';
         url: url,
         callbackUrlScheme: callbackScheme,
       );
+
+  static Future<void> _launchExternal(Uri url) =>
+      launchUrl(url, mode: LaunchMode.externalApplication);
 
   MicrosoftToken? _token;
   MicrosoftToken? get token => _token;
@@ -161,6 +181,15 @@ static const String redirectUri = '$redirectScheme://auth';
 
   // ── Interactive sign-in ───────────────────────────────────────────────────
 
+  /// True on desktop where `flutter_web_auth_2`'s embedded webview crashes
+  /// handing the redirect back to the app, so a system browser + loopback
+  /// server is used instead. Android/iOS keep the custom-scheme flow.
+  bool get _isDesktopLoopback =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.linux ||
+          defaultTargetPlatform == TargetPlatform.windows ||
+          defaultTargetPlatform == TargetPlatform.macOS);
+
   Future<String> signInInteractively() async {
     if (!clientIdIsConfigured(clientId)) {
       throw const StorageUnavailableException(
@@ -174,33 +203,69 @@ static const String redirectUri = '$redirectScheme://auth';
         .replaceAll('=', '');
     final state = _randomUrlSafe(16);
 
-    final authUrl = Uri.parse(_authorizeEndpoint).replace(queryParameters: {
-      'client_id': clientId,
-      'response_type': 'code',
-      'redirect_uri': redirectUri,
-      'response_mode': 'query',
-      'scope': scopes.join(' '),
-      'state': state,
-      'code_challenge': challenge,
-      'code_challenge_method': 'S256',
-      // Let Microsoft reuse an existing browser session where it can.
-      'prompt': 'consent',
-    });
+    if (_isDesktopLoopback) {
+      return _signInInteractivelyDesktop(
+        verifier: verifier,
+        challenge: challenge,
+        state: state,
+      );
+    }
+    return _signInInteractivelyMobile(
+      verifier: verifier,
+      challenge: challenge,
+      state: state,
+    );
+  }
 
-    final result = await _interactiveSignIn(authUrl.toString(), redirectScheme);
+  Uri _authorizeUrl({
+    required String state,
+    required String challenge,
+    required String redirect,
+  }) =>
+      Uri.parse(_authorizeEndpoint).replace(queryParameters: {
+        'client_id': clientId,
+        'response_type': 'code',
+        'redirect_uri': redirect,
+        'response_mode': 'query',
+        'scope': scopes.join(' '),
+        'state': state,
+        'code_challenge': challenge,
+        'code_challenge_method': 'S256',
+        // Let Microsoft reuse an existing browser session where it can.
+        'prompt': 'consent',
+      });
 
-    final returned = Uri.parse(result);
-    final error = returned.queryParameters['error_description'] ??
-        returned.queryParameters['error'];
+  /// Shared by both paths: turns the callback URI into a usable code, throwing
+  /// the same exceptions (consent denied, state mismatch, cancelled) whichever
+  /// way the browser came back.
+  String _codeFromCallback(Uri callback, String state) {
+    final error = callback.queryParameters['error_description'] ??
+        callback.queryParameters['error'];
     if (error != null) throw Exception('Microsoft sign-in failed: $error');
 
-    if (returned.queryParameters['state'] != state) {
+    if (callback.queryParameters['state'] != state) {
       throw Exception('Microsoft sign-in failed: state mismatch');
     }
-    final code = returned.queryParameters['code'];
+    final code = callback.queryParameters['code'];
     if (code == null || code.isEmpty) {
       throw Exception('Microsoft sign-in was cancelled');
     }
+    return code;
+  }
+
+  /// Mobile path: `flutter_web_auth_2` hands the `successerp://auth` redirect
+  /// back into the app. Unchanged from before the desktop flow existed.
+  Future<String> _signInInteractivelyMobile({
+    required String verifier,
+    required String challenge,
+    required String state,
+  }) async {
+    final authUrl =
+        _authorizeUrl(state: state, challenge: challenge, redirect: redirectUri);
+
+    final result = await _interactiveSignIn(authUrl.toString(), redirectScheme);
+
+    final code = _codeFromCallback(Uri.parse(result), state);
 
     final token = await _postToken({
       'client_id': clientId,
@@ -212,6 +277,70 @@ static const String redirectUri = '$redirectScheme://auth';
     });
     return token.accessToken;
   }
+
+  /// Desktop path: the system browser signs the user in and redirects to a
+  /// loopback HTTP server bound on a random free port. No embedded webview, so
+  /// no webview-crash-on-redirect.
+  Future<String> _signInInteractivelyDesktop({
+    required String verifier,
+    required String challenge,
+    required String state,
+  }) async {
+    final HttpServer server;
+    try {
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    } on IOException catch (e) {
+      throw StorageUnavailableException(
+        'Could not start the local sign-in server. Please try again. ($e)',
+      );
+    }
+    // One random port per attempt, registered on the Azure side as a single
+    // bare 'http://localhost' entry (the identity platform matches loopback
+    // redirects regardless of port).
+    final redirect = 'http://localhost:${server.port}';
+    final authUrl =
+        _authorizeUrl(state: state, challenge: challenge, redirect: redirect);
+
+    final String code;
+    try {
+      await _openBrowser(authUrl);
+      final request = await server.first.timeout(loopbackTimeout, onTimeout: () {
+        throw TimeoutException('desktop sign-in callback');
+      });
+      // The browser's spinner stops here, then we validate the callback.
+      request.response
+        ..headers.contentType = ContentType.html
+        ..write(_signedInHtml);
+      await request.response.close();
+      code = _codeFromCallback(request.requestedUri, state);
+    } on TimeoutException {
+      throw const StorageUnavailableException(
+        'Sign in timed out waiting for the browser. Please try again.',
+      );
+    } finally {
+      await server.close(force: true);
+    }
+
+    final token = await _postToken({
+      'client_id': clientId,
+      'scope': scopes.join(' '),
+      'code': code,
+      'redirect_uri': redirect,
+      'grant_type': 'authorization_code',
+      'code_verifier': verifier,
+    });
+    return token.accessToken;
+  }
+
+  static const String _signedInHtml = '''
+<!doctype html>
+<html>
+<body style="font-family: system-ui, sans-serif; text-align: center; padding-top: 3em">
+  <h2>Signed in</h2>
+  <p>You can close this tab and return to the app.</p>
+</body>
+</html>
+''';
 
   Future<void> signOut() async {
     _token = null;

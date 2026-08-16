@@ -6,6 +6,11 @@
 class WorkbookSchema {
   WorkbookSchema._();
 
+  /// Bumped whenever [tables] changes. Persisted alongside the store's local
+  /// layout cache so a schema change forces a fresh workbook verification
+  /// instead of trusting headers that no longer match what this build writes.
+  static const int version = 1;
+
   /// Column order here is only used when creating a *new* header row. Reads and
   /// writes always follow the header row actually present in the workbook, so
   /// adding a column never shifts existing data.

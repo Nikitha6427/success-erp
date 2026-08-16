@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:developer' as dev;
 
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../exceptions/storage_unavailable_exception.dart';
 import 'blank_workbook.dart';
@@ -20,12 +21,24 @@ class OneDriveExcelService implements WorkbookStore, StorageBackend {
   static const String workbookName = 'ERP_App_Data.xlsx';
   static const String _graph = 'https://graph.microsoft.com/v1.0';
 
+  /// Where the last-known-good workbook layout (item id + per-table headers) is
+  /// cached so a normal launch skips the full Graph verification.
+  static const String storeCacheKey = 'onedrive_store_cache';
+
   final MicrosoftAuth _auth;
   final http.Client _http;
 
-  OneDriveExcelService({MicrosoftAuth? auth, http.Client? httpClient})
-      : _auth = auth ?? MicrosoftAuth(),
-        _http = httpClient ?? http.Client();
+  /// Where the layout cache lives. Null disables caching entirely (tests that
+  /// exercise a specific setup pass null and always verify).
+  final Future<SharedPreferences> Function()? _prefsLoader;
+
+  OneDriveExcelService({
+    MicrosoftAuth? auth,
+    http.Client? httpClient,
+    Future<SharedPreferences> Function()? prefsLoader,
+  })  : _auth = auth ?? MicrosoftAuth(),
+        _http = httpClient ?? http.Client(),
+        _prefsLoader = prefsLoader;
 
   String? _itemId;
 
@@ -50,11 +63,17 @@ class OneDriveExcelService implements WorkbookStore, StorageBackend {
       await _auth.acquireTokenSilently();
     } on NoStoredSessionException {
       dev.log('[OneDrive] no stored session');
+      await _invalidateCache();
       return false;
     }
-    // The workbook must be located and its tables reconciled before any
-    // repository call, or every read dereferences a null item id — the shape of
-    // the recurring defect in AGENTS.md §9.
+    // A normal launch reuses the last verified layout — item id and per-table
+    // headers — so the ~13 round-trips of workbook/table reconciliation
+    // collapse to zero. Full verification still runs when the cache is absent,
+    // its schema version changed, or a call unexpectedly 404s.
+    if (await _tryRestoreFromCache()) {
+      dev.log('[OneDrive] Ready from local cache; skipping workbook verify');
+      return true;
+    }
     await _prepareStore();
     return true;
   }
@@ -71,17 +90,92 @@ class OneDriveExcelService implements WorkbookStore, StorageBackend {
     _itemId = null;
     _headerCache.clear();
     _tableNames.clear();
+    await _invalidateCache();
   }
 
   Future<void> _prepareStore() async {
     try {
       await _ensureWorkbook();
       await _ensureTables();
+      await _writeCache();
     } on StorageUnavailableException {
       rethrow;
     } catch (e, st) {
       dev.log('[OneDrive] store preparation failed: $e\n$st');
       throw StorageUnavailableException(_friendlyError(e));
+    }
+  }
+
+  // ── Local layout cache ─────────────────────────────────────────────────────
+  //
+  // The workbook's item id and each table's header row can't drift unless the
+  // schema changes or the workbook is removed/replaced, so caching them turns a
+  // cold start's workbook verification into zero network calls.
+  //
+  // It is deliberately an optimisation, never a correctness requirement: any
+  // cache read/write failure falls back to the full verification path, and any
+  // 404 from Graph (workbook/table deleted elsewhere) invalidates it so the
+  // next restore rebuilds the layout from scratch.
+
+  Future<bool> _tryRestoreFromCache() async {
+    final loader = _prefsLoader;
+    if (loader == null) return false;
+    try {
+      final prefs = await loader();
+      final raw = prefs.getString(storeCacheKey);
+      if (raw == null) return false;
+      final json = jsonDecode(raw) as Map<String, dynamic>;
+      if (json['schemaVersion'] != WorkbookSchema.version) return false;
+      final itemId = json['itemId'] as String?;
+      final headers = json['headers'] as Map<String, dynamic>?;
+      if (itemId == null || itemId.isEmpty || headers == null) return false;
+      for (final entity in WorkbookSchema.tableNames) {
+        final header = headers[entity];
+        if (header is! List || header.isEmpty) return false;
+      }
+      _itemId = itemId;
+      _headerCache.clear();
+      _tableNames.clear();
+      for (final entity in WorkbookSchema.tableNames) {
+        _headerCache[entity] =
+            (headers[entity] as List).map((c) => c.toString()).toList();
+        _tableNames[entity] = entity;
+      }
+      return true;
+    } catch (e) {
+      dev.log('[OneDrive] store cache unusable; verifying workbook: $e');
+      return false;
+    }
+  }
+
+  Future<void> _writeCache() async {
+    final loader = _prefsLoader;
+    if (loader == null) return;
+    try {
+      final prefs = await loader();
+      await prefs.setString(
+        storeCacheKey,
+        jsonEncode({
+          'schemaVersion': WorkbookSchema.version,
+          'itemId': _itemId,
+          'headers': {
+            for (final e in _headerCache.entries) e.key: e.value,
+          },
+        }),
+      );
+    } catch (e) {
+      dev.log('[OneDrive] could not persist store cache: $e');
+    }
+  }
+
+  Future<void> _invalidateCache() async {
+    final loader = _prefsLoader;
+    if (loader == null) return;
+    try {
+      final prefs = await loader();
+      await prefs.remove(storeCacheKey);
+    } catch (e) {
+      dev.log('[OneDrive] could not clear store cache: $e');
     }
   }
 
@@ -169,6 +263,12 @@ class OneDriveExcelService implements WorkbookStore, StorageBackend {
         continue;
       }
 
+      if (response.statusCode == 404) {
+        // The workbook or a table was deleted/moved outside the app. The cached
+        // layout is stale, so the next restore re-verifies from scratch.
+        await _invalidateCache();
+      }
+
       throw StorageUnavailableException(
         'OneDrive returned ${response.statusCode} for $method $path. '
         '${_graphMessage(response.body)}',
@@ -225,27 +325,21 @@ class OneDriveExcelService implements WorkbookStore, StorageBackend {
   String get _workbookPath => '/me/drive/items/$_itemId/workbook';
 
   Future<void> _ensureTables() async {
-    final worksheets = await _listNames('$_workbookPath/worksheets');
-    final tables = await _listNames('$_workbookPath/tables');
+    final (worksheets, tables) = await (
+      _listNames('$_workbookPath/worksheets'),
+      _listNames('$_workbookPath/tables'),
+    ).wait;
 
     _headerCache.clear();
     _tableNames.clear();
 
-    for (final entity in WorkbookSchema.tableNames) {
-      final headers = WorkbookSchema.headersOf(entity);
-
-      if (!worksheets.contains(entity)) {
-        await _send('POST', '$_workbookPath/worksheets',
-            jsonBody: {'name': entity});
-      }
-
-      if (!tables.contains(entity)) {
-        _headerCache[entity] = await _createTable(entity, headers);
-      } else {
-        _tableNames[entity] = entity;
-        _headerCache[entity] = await _reconcileHeader(entity, headers);
-      }
-    }
+    // One Graph round-trip per entity, all in flight at once instead of 10
+    // sequential ones. Each entity's worksheet/table work is independent, so
+    // the network latency of reconciling one table no longer blocks the others.
+    await Future.wait([
+      for (final entity in WorkbookSchema.tableNames)
+        _ensureTable(entity, worksheets.contains(entity), tables.contains(entity)),
+    ]);
 
     // The placeholder sheet from the freshly created package is no longer
     // needed once real worksheets exist. Failing to remove it is harmless.
@@ -257,6 +351,26 @@ class OneDriveExcelService implements WorkbookStore, StorageBackend {
       } catch (e) {
         dev.log('[OneDrive] could not delete placeholder sheet: $e');
       }
+    }
+  }
+
+  Future<void> _ensureTable(
+    String entity,
+    bool worksheetExists,
+    bool tableExists,
+  ) async {
+    final headers = WorkbookSchema.headersOf(entity);
+
+    if (!worksheetExists) {
+      await _send('POST', '$_workbookPath/worksheets',
+          jsonBody: {'name': entity});
+    }
+
+    if (!tableExists) {
+      _headerCache[entity] = await _createTable(entity, headers);
+    } else {
+      _tableNames[entity] = entity;
+      _headerCache[entity] = await _reconcileHeader(entity, headers);
     }
   }
 
