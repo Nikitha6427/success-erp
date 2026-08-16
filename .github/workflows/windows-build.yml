@@ -1,39 +1,82 @@
-name: Build Windows App
+name: Windows Installer
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Installer version (e.g. 1.0.0). Defaults to pubspec.yaml's version."
+        required: false
+        default: ""
   push:
-    branches:
-      - main
+    branches: [ main ]
+    tags: [ "v*.*.*" ]
+
+permissions:
+  contents: write
 
 jobs:
-  build-windows:
+  build-windows-installer:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - name: Check out repo
+        uses: actions/checkout@v4
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
+
+      - name: Resolve app version
+        id: version
+        shell: pwsh
+        run: |
+          $ver = "${{ github.event.inputs.version }}"
+          if ([string]::IsNullOrWhiteSpace($ver)) {
+            if ("${{ github.ref_type }}" -eq "tag") {
+              $ver = "${{ github.ref_name }}" -replace '^v', ''
+            } else {
+              $pubspec = Get-Content pubspec.yaml -Raw
+              if ($pubspec -match 'version:\s*([0-9]+\.[0-9]+\.[0-9]+)') {
+                $ver = $matches[1]
+              } else {
+                $ver = "0.0.0"
+              }
+            }
+          }
+          echo "value=$ver" >> $env:GITHUB_OUTPUT
+
+      - name: Enable Windows desktop support
+        run: flutter config --enable-windows-desktop
 
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Build Windows
-        run: flutter build windows --release --dart-define=MS_CLIENT_ID=${{ secrets.MS_CLIENT_ID }}
+      - name: Build Windows release
+        run: >
+          flutter build windows --release
+          --build-name=${{ steps.version.outputs.value }}
+          --dart-define=MS_CLIENT_ID=${{ secrets.MS_CLIENT_ID }}
 
-      - name: Package Windows application
+      - name: Compile installer with Inno Setup
         shell: pwsh
         run: |
-          Compress-Archive `
-            -Path "build/windows/x64/runner/Release/*" `
-            -DestinationPath "ERP-Manager-Windows.zip"
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc `
+            "/DMyAppVersion=${{ steps.version.outputs.value }}" `
+            "/DSourceDir=$($pwd.Path)\build\windows\x64\runner\Release" `
+            "/DOutputDir=$($pwd.Path)\dist" `
+            "installer\installer.iss"
 
-      - name: Upload Windows build
+      - name: Upload installer as build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ERP-Manager-Windows
-          path: ERP-Manager-Windows.zip
+          name: ERP-Manager-installer-${{ steps.version.outputs.value }}
+          path: dist/installer.exe
+
+      - name: Attach installer to GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/installer.exe
