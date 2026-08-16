@@ -1,29 +1,22 @@
 import '../../core/repository/base_repository.dart';
-import '../../core/services/sheets_service.dart';
 import 'models/purchase_order.dart';
 
 class PurchaseOrderRepository extends BaseRepository<PurchaseOrder> {
-  PurchaseOrderRepository(super.sheetsService);
+  PurchaseOrderRepository(super.store);
 
   @override
-  String get tabName => 'PurchaseOrders';
+  String get tableName => 'PurchaseOrders';
 
   @override
-  List<String> get headers => SheetsService.tabHeaders['PurchaseOrders']!;
+  PurchaseOrder fromMap(Map<String, String> row) => PurchaseOrder.fromMap(row);
 
   @override
-  PurchaseOrder fromRow(List<String> row) => PurchaseOrder.fromRow(row);
-
-  @override
-  List<String> toRow(PurchaseOrder item) => item.toRow();
+  Map<String, String> toMap(PurchaseOrder item) => item.toMap();
 
   @override
   String getId(PurchaseOrder item) => item.id;
 
-  @override
-  int get updatedAtColumnIndex => headers.length - 1;
-
-  /// Returns all PO IDs for a given customer.
+  /// PO ids belonging to a customer — used for referential-integrity checks.
   Future<List<String>> poIdsForCustomer(String customerId) async {
     final all = await loadAll();
     return all
@@ -32,13 +25,14 @@ class PurchaseOrderRepository extends BaseRepository<PurchaseOrder> {
         .toList();
   }
 
-  /// Returns all PO IDs that reference a given product (via PO items).
+  /// PO ids that reference a product through any PO line item.
   Future<List<String>> poIdsForProduct(String productId) async {
-    final allPoItems = await sheetsService.getAllRows('PurchaseOrderItems');
+    final rows = await store.getAllRows('PurchaseOrderItems');
     final poIds = <String>{};
-    for (final row in allPoItems) {
-      if (row.length > 2 && row[2] == productId) {
-        poIds.add(row[1]); // poId is column index 1
+    for (final row in rows) {
+      if ((row['product_id'] ?? '') == productId) {
+        final poId = row['po_id'] ?? '';
+        if (poId.isNotEmpty) poIds.add(poId);
       }
     }
     return poIds.toList();

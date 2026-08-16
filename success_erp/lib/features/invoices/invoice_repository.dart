@@ -1,21 +1,17 @@
 import '../../core/repository/base_repository.dart';
-import '../../core/services/sheets_service.dart';
 import 'models/invoice.dart';
 
 class InvoiceRepository extends BaseRepository<Invoice> {
-  InvoiceRepository(super.sheetsService);
+  InvoiceRepository(super.store);
 
   @override
-  String get tabName => 'Invoices';
+  String get tableName => 'Invoices';
 
   @override
-  List<String> get headers => SheetsService.tabHeaders['Invoices']!;
+  Invoice fromMap(Map<String, String> row) => Invoice.fromMap(row);
 
   @override
-  Invoice fromRow(List<String> row) => Invoice.fromRow(row);
-
-  @override
-  List<String> toRow(Invoice item) => item.toRow();
+  Map<String, String> toMap(Invoice item) => item.toMap();
 
   @override
   String getId(Invoice item) => item.id;

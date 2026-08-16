@@ -5,6 +5,7 @@ import '../../core/widgets/app_drawer.dart';
 import '../../features/customers/customers_notifier.dart';
 import '../../features/products/products_notifier.dart';
 import '../../features/purchase_orders/po_providers.dart';
+import '../../features/purchase_orders/models/purchase_order.dart';
 import '../../features/delivery_notes/dn_providers.dart';
 import '../../features/invoices/invoice_providers.dart';
 
@@ -34,13 +35,16 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     final customers = ref.watch(customersNotifierProvider).customers;
     final products = ref.watch(productsNotifierProvider).products;
     final pos = ref.watch(poNotifierProvider).orders;
-    final invoices = ref.watch(invoiceListProvider);
+    final invoices = ref.watch(invoiceListProvider).invoices;
 
-    final pendingPOs = pos.where((po) => po.status == 'Pending').length;
+    final pendingPOs =
+        pos.where((po) => po.status == PurchaseOrder.statusPending).length;
     final pendingDeliveries = pos
-        .where((po) => po.status == 'Partially Delivered' || po.status == 'Pending')
+        .where((po) =>
+            po.status == PurchaseOrder.statusPending ||
+            po.status == PurchaseOrder.statusPartiallyDelivered)
         .length;
-    final unpaidInvoices = invoices.where((inv) => inv.status != 'Paid').length;
+    final unpaidInvoices = invoices.where((inv) => !inv.isPaid).length;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Dashboard')),

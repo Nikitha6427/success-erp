@@ -1,66 +1,85 @@
 import 'dart:developer' as dev;
-import '../../core/services/sheets_service.dart';
+import 'workbook_store.dart';
 
+/// Human-readable sequential numbers (AGENTS.md §4 / §5).
+///
+/// The Counters table is keyed on (entity_name, category, financial_year) so
+/// each combination has its own independent sequence. Entities that don't need
+/// splitting leave category/financial_year blank.
 class CounterHelper {
-  final SheetsService _sheetsService;
-  CounterHelper(this._sheetsService);
+  final WorkbookStore _store;
+  CounterHelper(this._store);
 
-  /// Returns current Indian financial year as "YY-YY" (e.g. "24-25").
-  static String currentFiscalYear() {
-    final now = DateTime.now();
-    final year = now.year;
-    final month = now.month;
-    if (month >= 4) {
-      return '${year.toString().substring(2)}-${(year + 1).toString().substring(2)}';
-    } else {
-      return '${(year - 1).toString().substring(2)}-${year.toString().substring(2)}';
-    }
+  static const String _tab = 'Counters';
+
+  /// Indian financial year (April–March) for [date], formatted "2026-27".
+  /// A date in Jan–Mar 2027 belongs to FY "2026-27".
+  static String financialYearFor(DateTime date) {
+    final startYear = date.month >= 4 ? date.year : date.year - 1;
+    final endShort = ((startYear + 1) % 100).toString().padLeft(2, '0');
+    return '$startYear-$endShort';
   }
 
-  /// Reads the Counters tab, increments last_number for [entityName],
-  /// writes it back, and returns the formatted number (e.g. "PO-0001").
-  ///
-  /// If [fiscalYear] is provided the prefix becomes "FY-ENTITY-0001"
-  /// (e.g. "24-25-PO-0001") instead of just "PO-0001".
-  ///
-  /// If the entity row doesn't exist yet it is created with last_number = 1.
-  Future<String> nextNumber(String entityName, {String? fiscalYear}) async {
-    final rows = await _sheetsService.getAllRows('Counters');
+  /// Reads, increments and writes back the counter for the compound key.
+  /// Returns the new sequence value.
+  Future<int> _nextSequence(
+    String entityName,
+    String category,
+    String financialYear,
+  ) async {
+    final rows = await _store.getAllRows(_tab);
 
     int rowIndex = -1;
     int lastNumber = 0;
-
-    String key = entityName;
-    if (fiscalYear != null) key = '$entityName:$fiscalYear';
-
     for (int i = 0; i < rows.length; i++) {
-      if (rows[i].isNotEmpty && rows[i][0] == key) {
+      final r = rows[i];
+      if ((r['entity_name'] ?? '') == entityName &&
+          (r['category'] ?? '') == category &&
+          (r['financial_year'] ?? '') == financialYear) {
         rowIndex = i + 2;
-        lastNumber = int.tryParse(rows[i][1]) ?? 0;
+        lastNumber = int.tryParse(r['last_number'] ?? '') ?? 0;
         break;
       }
     }
 
     final next = lastNumber + 1;
-    final short = entityName.substring(0, 2).toUpperCase();
-    final formatted = fiscalYear != null
-        ? '$fiscalYear-$short-${next.toString().padLeft(4, '0')}'
-        : '$short-${next.toString().padLeft(4, '0')}';
+    final row = {
+      'entity_name': entityName,
+      'category': category,
+      'financial_year': financialYear,
+      'last_number': next.toString(),
+    };
 
     if (rowIndex > 0) {
-      await _sheetsService.updateRow(
-        'Counters',
-        rowIndex,
-        [key, next.toString()],
-      );
+      await _store.updateRow(_tab, rowIndex, row);
     } else {
-      await _sheetsService.appendRow(
-        'Counters',
-        [key, next.toString()],
-      );
+      await _store.appendRow(_tab, row);
     }
+    return next;
+  }
 
-    dev.log('[Counter] $key → $formatted');
-    return formatted;
+  /// `PO/{S|L}{FY}/{sequence}` — e.g. `PO/S2026-27/4`, `PO/L2026-27/73`.
+  ///
+  /// [category] must be `Sales` or `Labour`; the financial year is derived from
+  /// [orderDate]. The sequence is independent per (category, FY).
+  Future<String> nextPoNumber({
+    required String category,
+    required DateTime orderDate,
+  }) async {
+    final fy = financialYearFor(orderDate);
+    final letter = category == 'Labour' ? 'L' : 'S';
+    final seq = await _nextSequence('PurchaseOrder', category, fy);
+    final number = 'PO/$letter$fy/$seq';
+    dev.log('[Counter] PurchaseOrder/$category/$fy -> $number');
+    return number;
+  }
+
+  /// A simple zero-padded sequence for entities with no category/FY split,
+  /// e.g. `CUST-0001`, `DN-0007`, `INV-0042`.
+  Future<String> nextSimpleNumber(String entityName, String prefix) async {
+    final seq = await _nextSequence(entityName, '', '');
+    final number = '$prefix-${seq.toString().padLeft(4, '0')}';
+    dev.log('[Counter] $entityName -> $number');
+    return number;
   }
 }

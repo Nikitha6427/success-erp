@@ -1,21 +1,17 @@
 import '../../core/repository/base_repository.dart';
-import '../../core/services/sheets_service.dart';
 import 'models/delivery_note.dart';
 
 class DeliveryNoteRepository extends BaseRepository<DeliveryNote> {
-  DeliveryNoteRepository(super.sheetsService);
+  DeliveryNoteRepository(super.store);
 
   @override
-  String get tabName => 'DeliveryNotes';
+  String get tableName => 'DeliveryNotes';
 
   @override
-  List<String> get headers => SheetsService.tabHeaders['DeliveryNotes']!;
+  DeliveryNote fromMap(Map<String, String> row) => DeliveryNote.fromMap(row);
 
   @override
-  DeliveryNote fromRow(List<String> row) => DeliveryNote.fromRow(row);
-
-  @override
-  List<String> toRow(DeliveryNote item) => item.toRow();
+  Map<String, String> toMap(DeliveryNote item) => item.toMap();
 
   @override
   String getId(DeliveryNote item) => item.id;

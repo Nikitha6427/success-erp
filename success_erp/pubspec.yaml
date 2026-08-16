@@ -32,8 +32,6 @@ dependencies:
     sdk: flutter
 
   cupertino_icons: ^1.0.8
-  google_sign_in: ^6.2.0
-  googleapis: ^13.1.0
   http: ^1.2.0
   flutter_riverpod: ^2.5.0
   uuid: ^4.4.0
@@ -45,6 +43,10 @@ dependencies:
   share_plus: ^10.0.0
   path_provider: ^2.1.0
   shared_preferences: ^2.3.0
+  flutter_web_auth_2: ^5.1.0
+  flutter_secure_storage: ^10.3.1
+  crypto: ^3.0.7
+  archive: ^4.0.9
 
 dev_dependencies:
   flutter_test:

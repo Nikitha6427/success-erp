@@ -1,36 +1,36 @@
-import '../../../core/services/sheets_service.dart';
+import '../../core/services/workbook_store.dart';
 import 'models/company_profile.dart';
 
+/// The company profile is a singular record, so it always occupies the first
+/// data row of its tab.
 class CompanyProfileRepository {
-  final SheetsService _sheetsService;
-  static const String _tabName = 'CompanyProfile';
+  final WorkbookStore _store;
+  static const String _tableName = 'CompanyProfile';
   static const int _dataRowIndex = 2;
 
-  CompanyProfileRepository(this._sheetsService);
+  CompanyProfileRepository(this._store);
 
   Future<CompanyProfile?> load() async {
     try {
-      final row = await _sheetsService.getRow(_tabName, _dataRowIndex);
-      if (row.isEmpty || row[0].isEmpty) return null;
-      return CompanyProfile.fromRow(row);
+      final rows = await _store.getAllRows(_tableName);
+      if (rows.isEmpty) return null;
+      final profile = CompanyProfile.fromMap(rows.first);
+      if (profile.companyName.trim().isEmpty) return null;
+      return profile;
     } catch (_) {
+      // Empty / unreadable tab is treated as "not configured yet".
       return null;
     }
   }
 
   Future<void> save(CompanyProfile profile) async {
-    try {
-      final existing = await load();
-      final now = DateTime.now().toIso8601String();
-      final toSave = profile.copyWith(updatedAt: now);
-
-      if (existing == null) {
-        await _sheetsService.appendRow(_tabName, toSave.toRow());
-      } else {
-        await _sheetsService.updateRow(_tabName, _dataRowIndex, toSave.toRow());
-      }
-    } catch (e) {
-      throw Exception('Failed to save company profile: $e');
+    final toSave =
+        profile.copyWith(updatedAt: DateTime.now().toIso8601String());
+    final rows = await _store.getAllRows(_tableName);
+    if (rows.isEmpty) {
+      await _store.appendRow(_tableName, toSave.toMap());
+    } else {
+      await _store.updateRow(_tableName, _dataRowIndex, toSave.toMap());
     }
   }
 }

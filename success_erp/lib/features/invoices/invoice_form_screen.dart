@@ -1,22 +1,53 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
-import 'package:printing/printing.dart';
+import '../../core/services/invoice_math.dart';
+import '../../core/services/number_to_words.dart';
+import '../../core/widgets/document_copies_sheet.dart';
 import '../../core/widgets/snack_bar_helper.dart';
 import '../../core/widgets/empty_state.dart';
 import '../../core/widgets/conflict_dialog.dart';
-import '../../features/customers/customers_notifier.dart';
-import '../../features/products/products_notifier.dart';
-import '../../features/purchase_orders/po_providers.dart';
-import '../../features/purchase_orders/models/purchase_order.dart';
-import '../../features/delivery_notes/dn_providers.dart';
-import '../../features/settings/settings_notifier.dart';
+import '../customers/customers_notifier.dart';
+import '../products/models/product.dart';
+import '../products/products_notifier.dart';
+import '../purchase_orders/po_providers.dart';
+import '../purchase_orders/models/purchase_order.dart';
+import '../delivery_notes/dn_providers.dart';
+import '../settings/settings_notifier.dart';
 import 'models/invoice.dart';
 import 'invoice_providers.dart';
 import 'invoice_pdf.dart';
 
+class _InvoiceableLine {
+  final PurchaseOrderItem poItem;
+  final Product? product;
+  final double invoiceableQty;
+
+  const _InvoiceableLine({
+    required this.poItem,
+    required this.product,
+    required this.invoiceableQty,
+  });
+}
+
+class _FlatCharge {
+  final TextEditingController description = TextEditingController();
+  final TextEditingController amount = TextEditingController();
+
+  void dispose() {
+    description.dispose();
+    amount.dispose();
+  }
+
+  double get value => double.tryParse(amount.text.trim()) ?? 0;
+  bool get isComplete => description.text.trim().isNotEmpty && value > 0;
+}
+
 class InvoiceFormScreen extends ConsumerStatefulWidget {
+  /// When null the screen first asks which PO to invoice. One invoice covers
+  /// one PO — multi-PO consolidation is deferred (AGENTS.md §8).
   final String? poId;
 
   const InvoiceFormScreen({this.poId, super.key});
@@ -30,94 +61,112 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
   final Map<String, TextEditingController> _remarkControllers = {};
   final _vehicleController = TextEditingController();
   final _transportController = TextEditingController();
-  final _cgstPercentController = TextEditingController(text: '9');
-  final _sgstPercentController = TextEditingController(text: '9');
-  bool _isSaving = false;
+  // AGENTS.md §4/§5: default 9% each, fully editable per invoice.
+  final _cgstController =
+      TextEditingController(text: Invoice.defaultCgstPercent);
+  final _sgstController =
+      TextEditingController(text: Invoice.defaultSgstPercent);
+  final List<_FlatCharge> _flatCharges = [];
+
+  DateTime _invoiceDate = DateTime.now();
   bool _loading = true;
-  List<PurchaseOrder> _allPos = [];
-  List<_InvoiceableItem> _invoiceableItems = [];
-  final List<_FlatChargeItem> _flatCharges = [];
+  bool _isSaving = false;
+
+  PurchaseOrder? _po;
+  List<_InvoiceableLine> _lines = [];
+  List<PurchaseOrderItem> _allPoItems = [];
+  Map<String, double> _invoicedByPoItem = {};
+
+  /// PO-picker mode (widget.poId == null).
+  List<PurchaseOrder> _selectablePos = [];
 
   @override
   void initState() {
     super.initState();
-    _load();
+    // Deferred out of the build phase: notifier.load() mutates provider state
+    // synchronously, which Riverpod forbids during initState/build — this was
+    // the SettingsNotifier "Tried to modify a provider" crash on the invoice
+    // screen. Matches the pattern every other screen already uses.
+    Future.microtask(_load);
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    if (mounted) setState(() => _loading = true);
     try {
-      final poRepo = ref.read(poRepositoryProvider);
+      if (ref.read(productsNotifierProvider).products.isEmpty) {
+        await ref.read(productsNotifierProvider.notifier).load();
+      }
+      if (ref.read(customersNotifierProvider).customers.isEmpty) {
+        await ref.read(customersNotifierProvider.notifier).load();
+      }
+      if (ref.read(settingsNotifierProvider).profile == null) {
+        await ref.read(settingsNotifierProvider.notifier).load();
+      }
+
+      final invoicedByPoItem =
+          await ref.read(invoiceItemRepositoryProvider).invoicedQtyByPoItem();
       final itemRepo = ref.read(poItemRepositoryProvider);
-      final products = ref.read(productsNotifierProvider).products;
-      final productMap = {for (final p in products) p.id: p};
 
-      // Load all POs or a single PO
-      List<PurchaseOrder> allPos;
-      if (widget.poId != null) {
-        final po = await ref.read(poNotifierProvider.notifier).findById(widget.poId!);
-        allPos = po != null ? [po] : [];
-      } else {
-        allPos = await poRepo.loadAll();
-      }
-
-      // Load all existing invoices/items to compute invoiced quantities
-      final invoiceRepo = ref.read(invoiceRepositoryProvider);
-      final invoiceItemRepo = ref.read(invoiceItemRepositoryProvider);
-      final allInvoices = await invoiceRepo.loadAll();
-      final allInvoiceItems = await invoiceItemRepo.loadAll();
-
-      final invoicedQtyByProductAndPo = <String, double>{};
-      for (final invItem in allInvoiceItems) {
-        final inv = allInvoices.where((i) => i.id == invItem.invoiceId).firstOrNull;
-        if (inv == null) continue;
-        final key = '${inv.poId}:${invItem.productId}';
-        invoicedQtyByProductAndPo[key] =
-            (invoicedQtyByProductAndPo[key] ?? 0) + (double.tryParse(invItem.quantity) ?? 0);
-      }
-
-      final invoiceable = <_InvoiceableItem>[];
-      for (final po in allPos) {
-        final poItems = await itemRepo.loadByPoId(po.id);
-        for (final poItem in poItems) {
-          final delivered = double.tryParse(poItem.deliveredQty) ?? 0;
-          final rate = double.tryParse(poItem.rate) ?? 0;
-          if (rate == 0) continue; // skip zero-rate
-          final key = '${po.id}:${poItem.productId}';
-          final alreadyInvoiced = invoicedQtyByProductAndPo[key] ?? 0;
-          final remaining = delivered - alreadyInvoiced;
-          if (remaining > 0) {
-            invoiceable.add(_InvoiceableItem(
-              poItem: poItem,
-              po: po,
-              product: productMap[poItem.productId],
-              invoiceableQty: remaining,
-            ));
-            _qtyControllers[poItem.id] = TextEditingController();
-            _remarkControllers[poItem.id] = TextEditingController();
-          }
+      if (widget.poId == null) {
+        await ref.read(poNotifierProvider.notifier).load();
+        final pos = ref.read(poNotifierProvider).orders;
+        final allItems = await itemRepo.loadAll();
+        final selectable = <PurchaseOrder>[];
+        for (final po in pos) {
+          final items = allItems.where((i) => i.poId == po.id);
+          final any = items.any((i) =>
+              InvoiceMath.needsInvoicing(i) &&
+              InvoiceMath.invoiceableQty(
+                    poItem: i,
+                    invoicedByPoItem: invoicedByPoItem,
+                  ) >
+                  0);
+          if (any) selectable.add(po);
         }
-      }
-
-      // Pre-fill CGST/SGST from first item's product tax_percent
-      if (invoiceable.isNotEmpty) {
-        final firstProduct = invoiceable.first.product;
-        if (firstProduct != null) {
-          final halfRate = (double.tryParse(firstProduct.taxPercent) ?? 18) / 2;
-          _cgstPercentController.text = halfRate.toStringAsFixed(1);
-          _sgstPercentController.text = halfRate.toStringAsFixed(1);
-        }
-      }
-
-      if (mounted) {
+        if (!mounted) return;
         setState(() {
-          _allPos = allPos;
-          _invoiceableItems = invoiceable;
+          _selectablePos = selectable;
+          _invoicedByPoItem = invoicedByPoItem;
           _loading = false;
         });
+        return;
       }
+
+      final po = await ref.read(poNotifierProvider.notifier).findById(widget.poId!);
+      final poItems = await itemRepo.loadByPoId(widget.poId!);
+      final products = ref.read(productsNotifierProvider).products;
+      final productById = {for (final p in products) p.id: p};
+
+      final lines = <_InvoiceableLine>[];
+      for (final item in poItems) {
+        // Zero-rate lines never need invoicing (AGENTS.md §4).
+        if (!InvoiceMath.needsInvoicing(item)) continue;
+        final qty = InvoiceMath.invoiceableQty(
+          poItem: item,
+          invoicedByPoItem: invoicedByPoItem,
+        );
+        if (qty <= 0) continue;
+        lines.add(_InvoiceableLine(
+          poItem: item,
+          product: productById[item.productId],
+          invoiceableQty: qty,
+        ));
+        _qtyControllers.putIfAbsent(item.id, () => TextEditingController());
+        _remarkControllers.putIfAbsent(item.id, () => TextEditingController());
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _po = po;
+        _allPoItems = poItems;
+        _lines = lines;
+        _invoicedByPoItem = invoicedByPoItem;
+        _loading = false;
+      });
     } catch (e) {
-      if (mounted) setState(() => _loading = false);
+      if (!mounted) return;
+      setState(() => _loading = false);
+      showSnackBar(context, 'Could not load invoice data: $e', isError: true);
     }
   }
 
@@ -129,411 +178,367 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
     for (final c in _remarkControllers.values) {
       c.dispose();
     }
+    for (final fc in _flatCharges) {
+      fc.dispose();
+    }
     _vehicleController.dispose();
     _transportController.dispose();
-    _cgstPercentController.dispose();
-    _sgstPercentController.dispose();
-    for (final fc in _flatCharges) {
-      fc.descriptionController.dispose();
-      fc.amountController.dispose();
-    }
+    _cgstController.dispose();
+    _sgstController.dispose();
     super.dispose();
   }
 
-  void _addFlatCharge() {
-    setState(() {
-      _flatCharges.add(_FlatChargeItem(
-        descriptionController: TextEditingController(),
-        amountController: TextEditingController(),
-      ));
-    });
-  }
+  // ── Derived values ────────────────────────────────────────────────────────
 
-  void _removeFlatCharge(int index) {
-    final item = _flatCharges[index];
-    item.descriptionController.dispose();
-    item.amountController.dispose();
-    setState(() => _flatCharges.removeAt(index));
-  }
+  double _enteredQty(_InvoiceableLine line) =>
+      double.tryParse(_qtyControllers[line.poItem.id]?.text.trim() ?? '') ?? 0;
 
-  double get _subtotal {
-    double total = 0;
-    for (final item in _invoiceableItems) {
-      final controller = _qtyControllers[item.poItem.id];
-      if (controller == null) continue;
-      final qty = double.tryParse(controller.text.trim()) ?? 0;
-      final rate = double.tryParse(item.poItem.rate) ?? 0;
-      total += qty * rate;
+  /// Blank means "not billing this line on this invoice".
+  String? _qtyError(_InvoiceableLine line) {
+    final raw = _qtyControllers[line.poItem.id]?.text.trim() ?? '';
+    if (raw.isEmpty) return null;
+    final entered = double.tryParse(raw);
+    if (entered == null) return 'Enter a number';
+    if (entered <= 0) return 'Must be greater than 0';
+    // Validated against INVOICEABLE quantity, not pending quantity.
+    if (entered > line.invoiceableQty) {
+      return 'Max ${_n(line.invoiceableQty)} invoiceable';
     }
-    for (final fc in _flatCharges) {
-      total += double.tryParse(fc.amountController.text.trim()) ?? 0;
-    }
-    return total;
-  }
-
-  double get _cgstAmount {
-    return _subtotal * (double.tryParse(_cgstPercentController.text.trim()) ?? 0) / 100;
-  }
-
-  double get _sgstAmount {
-    return _subtotal * (double.tryParse(_sgstPercentController.text.trim()) ?? 0) / 100;
-  }
-
-  double get _grandTotal => _subtotal + _cgstAmount + _sgstAmount;
-
-  bool get _isValid {
-    for (final item in _invoiceableItems) {
-      final controller = _qtyControllers[item.poItem.id];
-      if (controller == null) continue;
-      final entered = double.tryParse(controller.text.trim()) ?? 0;
-      if (entered < 0 || entered > item.invoiceableQty) return false;
-    }
-    return _subtotal > 0;
-  }
-
-  String? _validateQty(String? value, _InvoiceableItem item) {
-    if (value == null || value.trim().isEmpty) return null;
-    final entered = double.tryParse(value.trim());
-    if (entered == null || entered < 0) return 'Invalid';
-    if (entered > item.invoiceableQty) return 'Max ${item.invoiceableQty.toInt()}';
     return null;
   }
 
+  String? _percentError(TextEditingController c) {
+    final raw = c.text.trim();
+    if (raw.isEmpty) return 'Required';
+    final v = double.tryParse(raw);
+    if (v == null) return 'Enter a number';
+    if (v < 0 || v > 100) return '0–100';
+    return null;
+  }
+
+  double get _cgstPercent => double.tryParse(_cgstController.text.trim()) ?? 0;
+  double get _sgstPercent => double.tryParse(_sgstController.text.trim()) ?? 0;
+
+  List<_InvoiceableLine> get _selectedLines =>
+      _lines.where((l) => _enteredQty(l) > 0).toList();
+
+  InvoiceTotals get _totals => InvoiceTotals.from(
+        lineAmounts: [
+          for (final l in _selectedLines)
+            InvoiceMath.lineAmount(_enteredQty(l), l.poItem.rt),
+          for (final fc in _flatCharges)
+            if (fc.isComplete) fc.value,
+        ],
+        cgstPercent: _cgstPercent,
+        sgstPercent: _sgstPercent,
+      );
+
+  bool get _isValid {
+    if (_lines.any((l) => _qtyError(l) != null)) return false;
+    if (_percentError(_cgstController) != null) return false;
+    if (_percentError(_sgstController) != null) return false;
+    if (_flatCharges.any((fc) =>
+        (fc.description.text.trim().isNotEmpty || fc.amount.text.trim().isNotEmpty) &&
+        !fc.isComplete)) {
+      return false;
+    }
+    return _selectedLines.isNotEmpty ||
+        _flatCharges.any((fc) => fc.isComplete);
+  }
+
+  // ── Save ──────────────────────────────────────────────────────────────────
+
   Future<void> _save() async {
-    if (!_isValid || _isSaving) return;
+    if (!_isValid || _isSaving || _po == null) return;
     setState(() => _isSaving = true);
+
+    final selected = _selectedLines;
+    final totals = _totals;
+
     try {
       final now = DateTime.now().toIso8601String();
       final counter = ref.read(counterHelperProvider);
       final invoiceRepo = ref.read(invoiceRepositoryProvider);
       final invoiceItemRepo = ref.read(invoiceItemRepositoryProvider);
       final poRepo = ref.read(poRepositoryProvider);
-      final itemRepo = ref.read(poItemRepositoryProvider);
 
       final invoiceId = const Uuid().v4();
-      final invoiceNumber = await counter.nextNumber('Invoice');
+      final invoiceNumber =
+          await counter.nextSimpleNumber('Invoice', 'INV');
 
-      final cgstPct = double.tryParse(_cgstPercentController.text.trim()) ?? 0;
-      final sgstPct = double.tryParse(_sgstPercentController.text.trim()) ?? 0;
-
-      final selectedItems = <_InvoiceableItem>[];
-      for (final item in _invoiceableItems) {
-        final controller = _qtyControllers[item.poItem.id];
-        if (controller == null) continue;
-        final qty = double.tryParse(controller.text.trim()) ?? 0;
-        if (qty <= 0) continue;
-        selectedItems.add(item);
-
-        final rate = double.tryParse(item.poItem.rate) ?? 0;
-        final taxPercent = double.tryParse(item.product?.taxPercent ?? '0') ?? 0;
-        final lineAmount = qty * rate;
-        final lineCgst = lineAmount * cgstPct / 100;
-        final lineSgst = lineAmount * sgstPct / 100;
-        final lineTotal = lineAmount + lineCgst + lineSgst;
-
-        await invoiceItemRepo.save(InvoiceItem(
-          id: const Uuid().v4(),
-          invoiceId: invoiceId,
-          productId: item.poItem.productId,
-          quantity: qty.toInt().toString(),
-          rate: rate.toString(),
-          taxPercent: taxPercent.toString(),
-          amount: lineTotal.toStringAsFixed(2),
-          remark: (_remarkControllers[item.poItem.id]?.text.trim() ?? ''),
-        ));
-      }
-
-      for (final fc in _flatCharges) {
-        final desc = fc.descriptionController.text.trim();
-        final amt = double.tryParse(fc.amountController.text.trim()) ?? 0;
-        if (desc.isEmpty || amt <= 0) continue;
-        final lineCgst = amt * cgstPct / 100;
-        final lineSgst = amt * sgstPct / 100;
-        await invoiceItemRepo.save(InvoiceItem(
-          id: const Uuid().v4(),
-          invoiceId: invoiceId,
-          productId: '',
-          quantity: '',
-          rate: '',
-          taxPercent: '0',
-          amount: (amt + lineCgst + lineSgst).toStringAsFixed(2),
-          remark: desc,
-        ));
-      }
-
-      // Build references
-      final poIds = selectedItems.map((i) => i.po.id).toSet().toList();
-      final poRefs = poIds.join(', ');
-      // Look up delivery note numbers for the invoiced PO items
-      final dnRepo = ref.read(dnRepositoryProvider);
-      final dnItemRepo = ref.read(dnItemRepositoryProvider);
-      final allDns = await dnRepo.loadAll();
-      final allDnItems = await dnItemRepo.loadAll();
-      final invoicedPoItemIds = selectedItems.map((i) => i.poItem.id).toSet();
-      final linkedDnIds = <String>{};
-      for (final dnItem in allDnItems) {
-        if (invoicedPoItemIds.contains(dnItem.poItemId)) {
-          linkedDnIds.add(dnItem.dnId);
-        }
-      }
-      final dnRefs = allDns
-          .where((dn) => linkedDnIds.contains(dn.id))
-          .map((dn) => dn.dnNumber)
-          .join(', ');
-
-      // Store poId as first PO for backward compat
-      final firstPoId = poIds.isNotEmpty ? poIds.first : '';
-
-      await invoiceRepo.save(Invoice(
+      final invoice = Invoice(
         id: invoiceId,
         invoiceNumber: invoiceNumber,
-        poId: firstPoId,
-        invoiceDate: now,
-        totalAmount: _grandTotal.toStringAsFixed(2),
-        taxAmount: (_cgstAmount + _sgstAmount).toStringAsFixed(2),
-        status: 'Pending',
-        vehicleDetails: _vehicleController.text.trim(),
-        gstDetails: _transportController.text.trim(),
-        cgstPercent: cgstPct.toStringAsFixed(1),
-        sgstPercent: sgstPct.toStringAsFixed(1),
-        deliveryNoteRefs: dnRefs,
-        poRefs: poRefs,
-      ));
+        poId: _po!.id,
+        invoiceDate: _invoiceDate.toIso8601String(),
+        subtotalAmount: totals.subtotal.toStringAsFixed(2),
+        cgstPercent: _trimPercent(totals.cgstPercent),
+        cgstAmount: totals.cgstAmount.toStringAsFixed(2),
+        sgstPercent: _trimPercent(totals.sgstPercent),
+        sgstAmount: totals.sgstAmount.toStringAsFixed(2),
+        totalAmount: totals.total.toStringAsFixed(2),
+        amountInWords: NumberToWords.convert(totals.total),
+        transportMode: _transportController.text.trim(),
+        vehicleNumber: _vehicleController.text.trim(),
+        status: Invoice.statusPending,
+        createdAt: now,
+      );
+      await invoiceRepo.save(invoice);
 
-      // Update PO statuses
-      for (final poId in poIds) {
-        final allPoItems = await itemRepo.loadByPoId(poId);
-        final allInvoices = await invoiceRepo.loadByPoId(poId);
-        final allInvItems = await invoiceItemRepo.loadAll();
-        final invIds = allInvoices.map((i) => i.id).toSet();
-        final invoicedByProduct = <String, double>{};
-        for (final item in allInvItems) {
-          if (invIds.contains(item.invoiceId)) {
-            invoicedByProduct[item.productId] =
-                (invoicedByProduct[item.productId] ?? 0) + (double.tryParse(item.quantity) ?? 0);
-          }
-        }
-        bool allFullyInvoiced = true;
-        for (final poItem in allPoItems) {
-          final delivered = double.tryParse(poItem.deliveredQty) ?? 0;
-          final rate = double.tryParse(poItem.rate) ?? 0;
-          if (rate == 0) continue;
-          final invoiced = invoicedByProduct[poItem.productId] ?? 0;
-          if (invoiced < delivered) {
-            allFullyInvoiced = false;
-            break;
-          }
-        }
-        if (allFullyInvoiced) {
-          final po = _allPos.where((p) => p.id == poId).firstOrNull;
-          if (po != null) {
-            await poRepo.update(po.copyWith(status: 'Invoiced', updatedAt: now));
-          }
-        }
+      final savedItems = <InvoiceItem>[];
+      for (final line in selected) {
+        final qty = _enteredQty(line);
+        // amount is quantity × rate, EXCLUDING tax — tax is applied once at
+        // invoice level so the item column always sums to the subtotal.
+        final item = InvoiceItem(
+          id: const Uuid().v4(),
+          invoiceId: invoiceId,
+          poItemId: line.poItem.id,
+          productId: line.poItem.productId,
+          description: line.product?.name ?? 'Item',
+          hsnSac: line.product?.hsnSac ?? '',
+          quantity: _n(qty),
+          rate: line.poItem.rate,
+          amount:
+              InvoiceMath.lineAmount(qty, line.poItem.rt).toStringAsFixed(2),
+          remarks: _remarkControllers[line.poItem.id]?.text.trim() ?? '',
+        );
+        await invoiceItemRepo.save(item);
+        savedItems.add(item);
       }
-
-      ref.read(poNotifierProvider.notifier).load();
-      ref.read(invoiceListProvider.notifier).load();
-
-      // Generate PDF
-      final customers = ref.read(customersNotifierProvider).customers;
-      final firstPo = selectedItems.isNotEmpty ? selectedItems.first.po : null;
-      final customer = customers.where((c) => c.id == (firstPo?.customerId ?? '')).firstOrNull;
-      final companyProfile = ref.read(settingsNotifierProvider).profile;
-
-      final pdfItems = selectedItems.map((item) {
-        final controller = _qtyControllers[item.poItem.id]!;
-        final qty = double.tryParse(controller.text.trim()) ?? 0;
-        final rate = double.tryParse(item.poItem.rate) ?? 0;
-        final lineAmount = qty * rate;
-        final lineCgst = lineAmount * cgstPct / 100;
-        final lineSgst = lineAmount * sgstPct / 100;
-        return {
-          'productName': item.product?.name ?? 'Unknown',
-          'hsnCode': item.product?.hsnCode ?? '',
-          'quantity': qty.toInt().toString(),
-          'rate': rate.toStringAsFixed(2),
-          'amount': (lineAmount + lineCgst + lineSgst).toStringAsFixed(2),
-          'remark': (_remarkControllers[item.poItem.id]?.text.trim() ?? ''),
-        };
-      }).toList();
 
       for (final fc in _flatCharges) {
-        final desc = fc.descriptionController.text.trim();
-        final amt = double.tryParse(fc.amountController.text.trim()) ?? 0;
-        if (desc.isEmpty || amt <= 0) continue;
-        final lineCgst = amt * cgstPct / 100;
-        final lineSgst = amt * sgstPct / 100;
-        pdfItems.add({
-          'productName': desc,
-          'hsnCode': '',
-          'quantity': '',
-          'rate': '',
-          'amount': (amt + lineCgst + lineSgst).toStringAsFixed(2),
-          'remark': '',
-        });
-      }
-
-      final pdf = await InvoicePdf.generate(
-        invoiceNumber: invoiceNumber,
-        invoiceDate: now,
-        poNumber: poRefs,
-        customerName: customer?.name ?? 'Unknown',
-        customerAddress: customer?.address ?? '',
-        customerGst: customer?.gstNumber ?? '',
-        customerTin: customer?.tinNumber ?? '',
-        customerCst: customer?.cstNumber ?? '',
-        vehicleDetails: _vehicleController.text.trim(),
-        gstDetails: _transportController.text.trim(),
-        items: pdfItems,
-        subtotal: _subtotal.toStringAsFixed(2),
-        cgstPercent: cgstPct.toStringAsFixed(1),
-        sgstPercent: sgstPct.toStringAsFixed(1),
-        cgstTotal: _cgstAmount.toStringAsFixed(2),
-        sgstTotal: _sgstAmount.toStringAsFixed(2),
-        grandTotal: _grandTotal.toStringAsFixed(2),
-        companyName: companyProfile?.companyName,
-        companyAddress: companyProfile?.address,
-        companyPhone: companyProfile?.phone,
-        companyGst: companyProfile?.gstNumber,
-        deliveryNoteRefs: dnRefs,
-      );
-
-      if (mounted) {
-        final pdfBytes = await pdf.save();
-        if (!mounted) return;
-        await Printing.layoutPdf(
-          onLayout: (format) async => pdfBytes,
-          name: 'Invoice $invoiceNumber',
+        if (!fc.isComplete) continue;
+        final item = InvoiceItem(
+          id: const Uuid().v4(),
+          invoiceId: invoiceId,
+          description: fc.description.text.trim(),
+          amount: fc.value.toStringAsFixed(2),
         );
-        if (!mounted) return;
-        showSnackBar(context, 'Invoice $invoiceNumber created');
-        context.pop();
+        await invoiceItemRepo.save(item);
+        savedItems.add(item);
       }
+
+      // PO becomes Invoiced only when every rate-bearing line is fully
+      // delivered AND fully invoiced.
+      final invoicedNow = Map<String, double>.from(_invoicedByPoItem);
+      for (final line in selected) {
+        invoicedNow[line.poItem.id] =
+            (invoicedNow[line.poItem.id] ?? 0) + _enteredQty(line);
+      }
+      if (InvoiceMath.isFullyInvoiced(
+        poItems: _allPoItems,
+        invoicedByPoItem: invoicedNow,
+      )) {
+        await poRepo.update(_po!.copyWith(
+          status: PurchaseOrder.statusInvoiced,
+          updatedAt: now,
+        ));
+      }
+
+      await ref.read(poNotifierProvider.notifier).load();
+      await ref.read(invoiceListProvider.notifier).load();
+
+      if (!mounted) return;
+      await _offerInvoiceCopies(invoice, savedItems, selected);
+
+      if (!mounted) return;
+      showSnackBar(context, 'Invoice $invoiceNumber created');
+      context.pop();
     } catch (e) {
       if (!mounted) return;
       final handled = await handleConflictError(context, e);
       if (!mounted) return;
-      if (!handled) showSnackBar(context, 'Save failed: $e', isError: true);
+      if (handled) {
+        await _load();
+      } else {
+        showSnackBar(context, 'Save failed: $e', isError: true);
+      }
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
   }
 
-  // Group items by customer for display
-  Map<String, List<_InvoiceableItem>> get _groupedByCustomer {
-    final customers = ref.read(customersNotifierProvider).customers;
-    final customerMap = {for (final c in customers) c.id: c.name};
-    final groups = <String, List<_InvoiceableItem>>{};
-    for (final item in _invoiceableItems) {
-      final name = customerMap[item.po.customerId] ?? 'Unknown';
-      groups.putIfAbsent(name, () => []);
-      groups[name]!.add(item);
-    }
-    return groups;
+  Future<void> _offerInvoiceCopies(
+    Invoice invoice,
+    List<InvoiceItem> items,
+    List<_InvoiceableLine> selected,
+  ) async {
+    final customer = ref
+        .read(customersNotifierProvider)
+        .customers
+        .where((c) => c.id == _po!.customerId)
+        .firstOrNull;
+    final company = ref.read(settingsNotifierProvider).profile;
+
+    // Delivery notes covering the invoiced PO line items.
+    final dns = await ref.read(dnRepositoryProvider).loadByPoId(_po!.id);
+    final dnItems = await ref.read(dnItemRepositoryProvider).loadAll();
+    final invoicedPoItemIds = selected.map((l) => l.poItem.id).toSet();
+    final linkedDnIds = dnItems
+        .where((di) => invoicedPoItemIds.contains(di.poItemId))
+        .map((di) => di.dnId)
+        .toSet();
+    final dnNumbers = dns
+        .where((dn) => linkedDnIds.contains(dn.id))
+        .map((dn) => dn.dnNumber)
+        .toList();
+
+    final copies = await InvoicePdf.generate(
+      invoice: invoice,
+      po: _po,
+      customer: customer,
+      company: company,
+      deliveryNoteNumbers: dnNumbers,
+      items: [
+        for (final item in items)
+          InvoicePdfLine(
+            description: item.description,
+            hsnSac: item.hsnSac,
+            quantity: item.quantity,
+            rate: item.rate,
+            amount: item.amount,
+            remarks: item.remarks,
+          ),
+      ],
+    );
+
+    if (!mounted) return;
+    await showDocumentCopiesSheet(
+      context,
+      title: 'Invoice',
+      documentNumber: invoice.invoiceNumber,
+      copies: copies,
+    );
   }
+
+  static String _n(double v) =>
+      v == v.roundToDouble() ? v.toInt().toString() : v.toString();
+
+  static String _trimPercent(double v) =>
+      v == v.roundToDouble() ? v.toInt().toString() : v.toString();
+
+  // ── UI ────────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final products = ref.watch(productsNotifierProvider).products;
-    final productMap = {for (final p in products) p.id: p.name};
-    final unitMap = {for (final p in products) p.id: p.unit};
-
     if (_loading) {
       return Scaffold(
         appBar: AppBar(title: const Text('Generate Invoice')),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
+    if (widget.poId == null) return _buildPoPicker();
+    if (_po == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Generate Invoice')),
+        body: const EmptyState(
+          icon: Icons.error_outline,
+          message: 'This purchase order could not be found.',
+        ),
+      );
+    }
+    return _buildForm();
+  }
 
-    final groups = _groupedByCustomer;
+  Widget _buildPoPicker() {
+    final customers = ref.watch(customersNotifierProvider).customers;
+    final customerById = {for (final c in customers) c.id: c.name};
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Generate Invoice')),
+      appBar: AppBar(title: const Text('Choose an order to invoice')),
+      body: _selectablePos.isEmpty
+          ? const EmptyState(
+              icon: Icons.receipt_outlined,
+              message: 'Nothing is ready to invoice yet.\n'
+                  'Record a delivery first.',
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              itemCount: _selectablePos.length,
+              itemBuilder: (context, index) {
+                final po = _selectablePos[index];
+                return Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.receipt_long),
+                    title: Text(po.poNumber),
+                    subtitle:
+                        Text(customerById[po.customerId] ?? 'Unknown customer'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.pushReplacement(
+                      '/purchase-orders/${po.id}/invoice',
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+
+  Widget _buildForm() {
+    final theme = Theme.of(context);
+    final totals = _totals;
+    final money = NumberFormat.currency(locale: 'en_IN', symbol: '₹');
+
+    return Scaffold(
+      appBar: AppBar(title: Text('Invoice · ${_po!.poNumber}')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
         children: [
-          TextField(
-            controller: _vehicleController,
-            decoration: const InputDecoration(labelText: 'Vehicle Number'),
-            textInputAction: TextInputAction.next,
+          InkWell(
+            onTap: () async {
+              final picked = await showDatePicker(
+                context: context,
+                initialDate: _invoiceDate,
+                firstDate: DateTime(2000),
+                lastDate: DateTime(2100),
+              );
+              if (picked != null) setState(() => _invoiceDate = picked);
+            },
+            child: InputDecorator(
+              decoration: const InputDecoration(
+                labelText: 'Invoice date *',
+                suffixIcon: Icon(Icons.calendar_today, size: 18),
+              ),
+              child: Text(DateFormat.yMMMd().format(_invoiceDate)),
+            ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           TextField(
             controller: _transportController,
             decoration: const InputDecoration(labelText: 'Transportation Mode'),
             textInputAction: TextInputAction.next,
           ),
-          const SizedBox(height: 16),
-          Text(
-            'Select items to invoice from delivered quantities',
-            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _vehicleController,
+            decoration: const InputDecoration(labelText: 'Vehicle Number'),
+            textInputAction: TextInputAction.next,
           ),
-          const SizedBox(height: 16),
-          ...groups.entries.map((entry) {
-            final customerName = entry.key;
-            final items = entry.value;
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(customerName, style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                ...items.map((item) {
-                  final productName = productMap[item.poItem.productId] ?? 'Unknown';
-                  final rate = double.tryParse(item.poItem.rate) ?? 0;
-                  final unit = unitMap[item.poItem.productId] ?? '';
-                  final controller = _qtyControllers[item.poItem.id];
-                  final remarkController = _remarkControllers[item.poItem.id];
-                  return Card(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(productName, style: theme.textTheme.titleSmall),
-                          const SizedBox(height: 2),
-                          Text(
-                            'PO: ${item.po.poNumber}  •  Avail: ${item.invoiceableQty.toInt()} $unit  •  Rate: ${rate.toStringAsFixed(2)}',
-                            style: theme.textTheme.bodySmall,
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: controller,
-                                  decoration: InputDecoration(
-                                    labelText: 'Qty',
-                                    isDense: true,
-                                    errorText: controller != null && controller.text.isNotEmpty
-                                        ? _validateQty(controller.text, item)
-                                        : null,
-                                  ),
-                                  keyboardType: TextInputType.number,
-                                  onChanged: (_) => setState(() {}),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: TextField(
-                                  controller: remarkController,
-                                  decoration: const InputDecoration(labelText: 'Remarks', isDense: true),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                }),
-                const SizedBox(height: 12),
-              ],
-            );
-          }),
-          // Flat charges
+
+          const SizedBox(height: 24),
+          Text('Delivered & not yet invoiced',
+              style: theme.textTheme.titleMedium),
+          Text(
+            'Leave a line blank to bill it on a later invoice.',
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.outline),
+          ),
+          const SizedBox(height: 12),
+          if (_lines.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: EmptyState(
+                icon: Icons.inbox_outlined,
+                message: 'Nothing left to invoice on this order',
+              ),
+            )
+          else
+            ..._lines.map(_lineCard),
+
+          const SizedBox(height: 8),
+          Text('Additional charges', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 8),
           ..._flatCharges.asMap().entries.map((entry) {
             final i = entry.key;
             final fc = entry.value;
@@ -545,23 +550,36 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
                   children: [
                     Expanded(
                       child: TextField(
-                        controller: fc.descriptionController,
-                        decoration: const InputDecoration(labelText: 'Charge description', isDense: true),
+                        controller: fc.description,
+                        decoration: const InputDecoration(
+                          labelText: 'Charge description',
+                          isDense: true,
+                        ),
+                        onChanged: (_) => setState(() {}),
                       ),
                     ),
                     const SizedBox(width: 8),
                     SizedBox(
-                      width: 120,
+                      width: 110,
                       child: TextField(
-                        controller: fc.amountController,
-                        decoration: const InputDecoration(labelText: 'Amount', isDense: true),
-                        keyboardType: TextInputType.number,
+                        controller: fc.amount,
+                        decoration: const InputDecoration(
+                          labelText: 'Amount',
+                          isDense: true,
+                        ),
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
                         onChanged: (_) => setState(() {}),
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
-                      onPressed: () => _removeFlatCharge(i),
+                      icon: Icon(Icons.remove_circle_outline,
+                          color: theme.colorScheme.error),
+                      tooltip: 'Remove charge',
+                      onPressed: () {
+                        fc.dispose();
+                        setState(() => _flatCharges.removeAt(i));
+                      },
                     ),
                   ],
                 ),
@@ -569,105 +587,177 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
             );
           }),
           TextButton.icon(
-            onPressed: _addFlatCharge,
+            onPressed: () => setState(() => _flatCharges.add(_FlatCharge())),
             icon: const Icon(Icons.add),
             label: const Text('Add flat charge (no qty/rate)'),
           ),
-          if (_invoiceableItems.isEmpty && _flatCharges.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 32),
-              child: EmptyState(
-                icon: Icons.receipt_outlined,
-                message: 'No items to invoice',
-              ),
-            ),
+
           const SizedBox(height: 16),
-          // Tax section
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Tax Details', style: theme.textTheme.titleSmall),
+                  Text('Tax', style: theme.textTheme.titleSmall),
                   const SizedBox(height: 12),
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Expanded(
                         child: TextField(
-                          controller: _cgstPercentController,
-                          decoration: const InputDecoration(labelText: 'CGST %', suffixText: '%', isDense: true),
-                          keyboardType: TextInputType.number,
+                          controller: _cgstController,
+                          decoration: InputDecoration(
+                            labelText: 'CGST %',
+                            suffixText: '%',
+                            isDense: true,
+                            errorText: _percentError(_cgstController),
+                          ),
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
                           onChanged: (_) => setState(() {}),
                         ),
                       ),
                       const SizedBox(width: 16),
                       Expanded(
                         child: TextField(
-                          controller: _sgstPercentController,
-                          decoration: const InputDecoration(labelText: 'SGST %', suffixText: '%', isDense: true),
-                          keyboardType: TextInputType.number,
+                          controller: _sgstController,
+                          decoration: InputDecoration(
+                            labelText: 'SGST %',
+                            suffixText: '%',
+                            isDense: true,
+                            errorText: _percentError(_sgstController),
+                          ),
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
                           onChanged: (_) => setState(() {}),
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 12),
-                  _summaryRow('Subtotal', _subtotal.toStringAsFixed(2)),
-                  _summaryRow('CGST (${_cgstPercentController.text.isNotEmpty ? _cgstPercentController.text : '0'}%)', _cgstAmount.toStringAsFixed(2)),
-                  _summaryRow('SGST (${_sgstPercentController.text.isNotEmpty ? _sgstPercentController.text : '0'}%)', _sgstAmount.toStringAsFixed(2)),
+                  _summaryRow('Subtotal', money.format(totals.subtotal)),
+                  _summaryRow(
+                    'CGST (${_trimPercent(totals.cgstPercent)}%)',
+                    money.format(totals.cgstAmount),
+                  ),
+                  _summaryRow(
+                    'SGST (${_trimPercent(totals.sgstPercent)}%)',
+                    money.format(totals.sgstAmount),
+                  ),
                   const Divider(),
-                  _summaryRow('Grand Total', _grandTotal.toStringAsFixed(2), bold: true, large: true),
+                  _summaryRow('Grand Total', money.format(totals.total),
+                      bold: true),
+                  const SizedBox(height: 8),
+                  Text(
+                    NumberToWords.convert(totals.total),
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(fontStyle: FontStyle.italic),
+                  ),
                 ],
               ),
             ),
           ),
+
           const SizedBox(height: 24),
           FilledButton(
             onPressed: _isValid && !_isSaving ? _save : null,
             child: _isSaving
-                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : const Text('Create Invoice'),
           ),
+          if (!_isValid && !_isSaving)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'Enter a quantity for at least one line, or add a flat charge.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: theme.colorScheme.error, fontSize: 12),
+              ),
+            ),
         ],
       ),
     );
   }
 
-  Widget _summaryRow(String label, String value, {bool bold = false, bool large = false}) {
+  Widget _lineCard(_InvoiceableLine line) {
+    final theme = Theme.of(context);
+    final unit = line.product?.unit ?? '';
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(line.product?.name ?? 'Unknown',
+                style: theme.textTheme.titleSmall),
+            const SizedBox(height: 2),
+            Text(
+              'Invoiceable ${_n(line.invoiceableQty)} $unit  •  '
+              'Rate ${line.poItem.rate}'
+              '${line.product?.hsnSac.isNotEmpty == true ? '  •  HSN/SAC ${line.product!.hsnSac}' : ''}',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _qtyControllers[line.poItem.id],
+                    decoration: InputDecoration(
+                      labelText: 'Qty to bill',
+                      isDense: true,
+                      errorText: _qtyError(line),
+                    ),
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _remarkControllers[line.poItem.id],
+                    decoration: const InputDecoration(
+                      labelText: 'Remarks',
+                      isDense: true,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (_enteredQty(line) > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Line amount: '
+                  '${InvoiceMath.lineAmount(_enteredQty(line), line.poItem.rt).toStringAsFixed(2)}',
+                  style: theme.textTheme.bodySmall,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _summaryRow(String label, String value, {bool bold = false}) {
+    final style = TextStyle(
+      fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+      fontSize: bold ? 16 : 14,
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: TextStyle(fontWeight: bold ? FontWeight.bold : FontWeight.normal, fontSize: large ? 16 : 14)),
-          Text(value, style: TextStyle(fontWeight: bold ? FontWeight.bold : FontWeight.normal, fontSize: large ? 16 : 14)),
-        ],
+        children: [Text(label, style: style), Text(value, style: style)],
       ),
     );
   }
-}
-
-class _InvoiceableItem {
-  final PurchaseOrderItem poItem;
-  final PurchaseOrder po;
-  final dynamic product;
-  final double invoiceableQty;
-
-  const _InvoiceableItem({
-    required this.poItem,
-    required this.po,
-    required this.product,
-    required this.invoiceableQty,
-  });
-}
-
-class _FlatChargeItem {
-  final TextEditingController descriptionController;
-  final TextEditingController amountController;
-
-  _FlatChargeItem({
-    required this.descriptionController,
-    required this.amountController,
-  });
 }

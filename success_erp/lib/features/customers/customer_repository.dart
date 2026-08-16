@@ -1,25 +1,18 @@
 import '../../core/repository/base_repository.dart';
-import '../../core/services/sheets_service.dart';
 import 'models/customer.dart';
 
 class CustomerRepository extends BaseRepository<Customer> {
-  CustomerRepository(super.sheetsService);
+  CustomerRepository(super.store);
 
   @override
-  String get tabName => 'Customers';
+  String get tableName => 'Customers';
 
   @override
-  List<String> get headers => SheetsService.tabHeaders['Customers']!;
+  Customer fromMap(Map<String, String> row) => Customer.fromMap(row);
 
   @override
-  Customer fromRow(List<String> row) => Customer.fromRow(row);
-
-  @override
-  List<String> toRow(Customer item) => item.toRow();
+  Map<String, String> toMap(Customer item) => item.toMap();
 
   @override
   String getId(Customer item) => item.id;
-
-  @override
-  int get updatedAtColumnIndex => 7;
 }

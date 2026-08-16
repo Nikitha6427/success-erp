@@ -12,8 +12,7 @@ class CustomerFormScreen extends ConsumerStatefulWidget {
   const CustomerFormScreen({this.id, super.key});
 
   @override
-  ConsumerState<CustomerFormScreen> createState() =>
-      _CustomerFormScreenState();
+  ConsumerState<CustomerFormScreen> createState() => _CustomerFormScreenState();
 }
 
 class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
@@ -24,7 +23,8 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
   final _streetController = TextEditingController();
   final _areaController = TextEditingController();
   final _cityController = TextEditingController();
-  final _stateController = TextEditingController(text: 'India');
+  final _stateController = TextEditingController();
+  // AGENTS.md §4: Country defaults to "India" — State does not.
   final _countryController = TextEditingController(text: 'India');
   final _pincodeController = TextEditingController();
   final _gstController = TextEditingController();
@@ -33,56 +33,69 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
 
   bool _isSaving = false;
   String? _duplicateError;
-
   Customer? _existing;
 
   @override
   void initState() {
     super.initState();
     if (widget.id != null) {
-      _existing = ref.read(customersNotifierProvider).customers
-          .where((c) => c.id == widget.id)
-          .firstOrNull;
+      _existing = ref.read(customersNotifierProvider.notifier).findById(widget.id!);
       if (_existing != null) {
-        _nameController.text = _existing!.name;
-        _phoneController.text = _existing!.phone;
-        _emailController.text = _existing!.email;
-        _gstController.text = _existing!.gstNumber;
-        _tinController.text = _existing!.tinNumber;
-        _cstController.text = _existing!.cstNumber;
-        _streetController.text = _existing!.address;
+        _fill(_existing!);
       } else {
-        Future.microtask(
-          () => ref.read(customersNotifierProvider.notifier).load(),
-        );
+        // Deep-linked or reloaded: fetch, then populate.
+        Future.microtask(() async {
+          await ref.read(customersNotifierProvider.notifier).load();
+          if (!mounted) return;
+          final found =
+              ref.read(customersNotifierProvider.notifier).findById(widget.id!);
+          if (found != null) setState(() => _fill(found));
+        });
       }
     }
   }
 
+  void _fill(Customer c) {
+    _existing = c;
+    _nameController.text = c.name;
+    _phoneController.text = c.phone;
+    _emailController.text = c.email;
+    _streetController.text = c.street;
+    _areaController.text = c.area;
+    _cityController.text = c.cityDistrict;
+    _stateController.text = c.state;
+    _countryController.text = c.country.isEmpty ? 'India' : c.country;
+    _pincodeController.text = c.pincode;
+    _gstController.text = c.gstNumber;
+    _tinController.text = c.tinNumber;
+    _cstController.text = c.cstNumber;
+  }
+
   @override
   void dispose() {
-    _nameController.dispose();
-    _phoneController.dispose();
-    _emailController.dispose();
-    _streetController.dispose();
-    _areaController.dispose();
-    _cityController.dispose();
-    _stateController.dispose();
-    _countryController.dispose();
-    _pincodeController.dispose();
-    _gstController.dispose();
-    _tinController.dispose();
-    _cstController.dispose();
+    for (final c in [
+      _nameController,
+      _phoneController,
+      _emailController,
+      _streetController,
+      _areaController,
+      _cityController,
+      _stateController,
+      _countryController,
+      _pincodeController,
+      _gstController,
+      _tinController,
+      _cstController,
+    ]) {
+      c.dispose();
+    }
     super.dispose();
   }
 
-  String? _validateName(String? value) {
-    if (value == null || value.trim().isEmpty) {
-      return 'Name is required';
-    }
-    return null;
-  }
+  String? _validateName(String? value) =>
+      (value == null || value.trim().isEmpty) ? 'Name is required' : null;
 
+  /// Optional, but must be exactly 10 digits when filled in (AGENTS.md §4).
   String? _validatePhone(String? value) {
     if (value == null || value.trim().isEmpty) return null;
     if (!RegExp(r'^\d{10}$').hasMatch(value.trim())) {
@@ -99,25 +112,27 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
     return null;
   }
 
+  String? _validatePincode(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
+    if (!RegExp(r'^\d{6}$').hasMatch(value.trim())) {
+      return 'Pincode must be 6 digits';
+    }
+    return null;
+  }
+
   bool get _isValid =>
       _validateName(_nameController.text) == null &&
       _validatePhone(_phoneController.text) == null &&
       _validateEmail(_emailController.text) == null &&
+      _validatePincode(_pincodeController.text) == null &&
       _duplicateError == null;
 
   void _checkDuplicate() {
-    final name = _nameController.text;
-    final phone = _phoneController.text;
-    if (name.trim().isEmpty || phone.trim().isEmpty) {
-      setState(() => _duplicateError = null);
-      return;
-    }
-    final notifier = ref.read(customersNotifierProvider.notifier);
-    final existing = notifier.findDuplicate(
-      name,
-      phone,
-      excludeId: widget.id,
-    );
+    final existing = ref.read(customersNotifierProvider.notifier).findDuplicate(
+          _nameController.text,
+          _phoneController.text,
+          excludeId: widget.id,
+        );
     setState(() {
       _duplicateError = existing != null
           ? 'A customer with this name and phone number already exists.'
@@ -126,66 +141,45 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
   }
 
   Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (!(_formKey.currentState?.validate() ?? false)) return;
     if (!_isValid || _isSaving) return;
+
+    final notifier = ref.read(customersNotifierProvider.notifier);
+    final dup = notifier.findDuplicate(
+      _nameController.text,
+      _phoneController.text,
+      excludeId: widget.id,
+    );
+    if (dup != null) {
+      setState(() => _duplicateError =
+          'A customer with this name and phone number already exists.');
+      return;
+    }
+
     setState(() => _isSaving = true);
     try {
       final now = DateTime.now().toIso8601String();
-      final notifier = ref.read(customersNotifierProvider.notifier);
-
-      // Build single address string from sub-fields
-      final addrParts = <String>[
-        _streetController.text.trim(),
-        _areaController.text.trim(),
-        _cityController.text.trim(),
-        _stateController.text.trim(),
-        _countryController.text.trim(),
-        _pincodeController.text.trim(),
-      ].where((p) => p.isNotEmpty);
-      final combinedAddress = addrParts.isNotEmpty ? addrParts.join(', ') : '';
-
-      // Final duplicate check before save
-      final dup = notifier.findDuplicate(
-        _nameController.text,
-        _phoneController.text,
-        excludeId: widget.id,
+      final base = (_existing ?? Customer(id: '', name: '', createdAt: now))
+          .copyWith(
+        name: _nameController.text.trim(),
+        phone: _phoneController.text.trim(),
+        email: _emailController.text.trim(),
+        street: _streetController.text.trim(),
+        area: _areaController.text.trim(),
+        cityDistrict: _cityController.text.trim(),
+        state: _stateController.text.trim(),
+        country: _countryController.text.trim(),
+        pincode: _pincodeController.text.trim(),
+        gstNumber: _gstController.text.trim(),
+        tinNumber: _tinController.text.trim(),
+        cstNumber: _cstController.text.trim(),
+        updatedAt: now,
       );
-      if (dup != null) {
-        setState(() {
-          _duplicateError = 'A customer with this name and phone number already exists.';
-          _isSaving = false;
-        });
-        return;
-      }
 
       if (_existing != null) {
-        await notifier.update(
-          _existing!.copyWith(
-            name: _nameController.text.trim(),
-            phone: _phoneController.text.trim(),
-            email: _emailController.text.trim(),
-            address: combinedAddress,
-            gstNumber: _gstController.text.trim(),
-            tinNumber: _tinController.text.trim(),
-            cstNumber: _cstController.text.trim(),
-            updatedAt: now,
-          ),
-        );
+        await notifier.update(base);
       } else {
-        await notifier.add(
-          Customer(
-            id: '',
-            name: _nameController.text.trim(),
-            phone: _phoneController.text.trim(),
-            email: _emailController.text.trim(),
-            address: combinedAddress,
-            gstNumber: _gstController.text.trim(),
-            tinNumber: _tinController.text.trim(),
-            cstNumber: _cstController.text.trim(),
-            createdAt: now,
-            updatedAt: now,
-          ),
-        );
+        await notifier.add(base);
       }
       if (mounted) {
         showSnackBar(context, 'Customer saved');
@@ -195,7 +189,12 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
       if (!mounted) return;
       final handled = await handleConflictError(context, e);
       if (!mounted) return;
-      if (!handled) showSnackBar(context, 'Save failed: $e', isError: true);
+      if (handled) {
+        await ref.read(customersNotifierProvider.notifier).load();
+        if (mounted) context.pop();
+      } else {
+        showSnackBar(context, 'Save failed: $e', isError: true);
+      }
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
@@ -204,11 +203,11 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
   @override
   Widget build(BuildContext context) {
     final isEditing = _existing != null;
-    final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(title: Text(isEditing ? 'Edit Customer' : 'Add Customer')),
       body: Form(
         key: _formKey,
+        autovalidateMode: AutovalidateMode.onUserInteraction,
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
@@ -225,7 +224,10 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
             const SizedBox(height: 16),
             TextFormField(
               controller: _phoneController,
-              decoration: const InputDecoration(labelText: 'Phone (10 digits)'),
+              decoration: InputDecoration(
+                labelText: 'Phone (10 digits)',
+                errorText: _duplicateError,
+              ),
               validator: _validatePhone,
               keyboardType: TextInputType.phone,
               textInputAction: TextInputAction.next,
@@ -234,23 +236,6 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
                 _checkDuplicate();
               },
             ),
-            if (_phoneController.text.isNotEmpty && _validatePhone(_phoneController.text) != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                _validatePhone(_phoneController.text)!,
-                style: TextStyle(color: theme.colorScheme.error, fontSize: 12),
-              ),
-            ],
-            if (_duplicateError != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                _duplicateError!,
-                style: TextStyle(
-                  color: theme.colorScheme.error,
-                  fontSize: 12,
-                ),
-              ),
-            ],
             const SizedBox(height: 16),
             TextFormField(
               controller: _emailController,
@@ -260,35 +245,24 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
               textInputAction: TextInputAction.next,
               onChanged: (_) => setState(() {}),
             ),
-            if (_emailController.text.isNotEmpty && _validateEmail(_emailController.text) != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                _validateEmail(_emailController.text)!,
-                style: TextStyle(color: theme.colorScheme.error, fontSize: 12),
-              ),
-            ],
-            const SizedBox(height: 16),
-            Text('Address', style: theme.textTheme.titleSmall),
-            const SizedBox(height: 8),
+            const SizedBox(height: 24),
+            _sectionLabel(context, 'Address'),
             TextFormField(
               controller: _streetController,
               decoration: const InputDecoration(labelText: 'Street'),
               textInputAction: TextInputAction.next,
-              onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 12),
             TextFormField(
               controller: _areaController,
               decoration: const InputDecoration(labelText: 'Area / Locality'),
               textInputAction: TextInputAction.next,
-              onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 12),
             TextFormField(
               controller: _cityController,
               decoration: const InputDecoration(labelText: 'City / District'),
               textInputAction: TextInputAction.next,
-              onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 12),
             Row(
@@ -298,7 +272,6 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
                     controller: _stateController,
                     decoration: const InputDecoration(labelText: 'State'),
                     textInputAction: TextInputAction.next,
-                    onChanged: (_) => setState(() {}),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -307,7 +280,6 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
                     controller: _countryController,
                     decoration: const InputDecoration(labelText: 'Country'),
                     textInputAction: TextInputAction.next,
-                    onChanged: (_) => setState(() {}),
                   ),
                 ),
               ],
@@ -316,25 +288,23 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
             TextFormField(
               controller: _pincodeController,
               decoration: const InputDecoration(labelText: 'Pincode'),
+              validator: _validatePincode,
               keyboardType: TextInputType.number,
               textInputAction: TextInputAction.next,
               onChanged: (_) => setState(() {}),
             ),
-            const SizedBox(height: 16),
-            Text('Tax Info', style: theme.textTheme.titleSmall),
-            const SizedBox(height: 8),
+            const SizedBox(height: 24),
+            _sectionLabel(context, 'Tax Info'),
             TextFormField(
               controller: _gstController,
               decoration: const InputDecoration(labelText: 'GST Number'),
               textInputAction: TextInputAction.next,
-              onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 12),
             TextFormField(
               controller: _tinController,
               decoration: const InputDecoration(labelText: 'TIN Number'),
               textInputAction: TextInputAction.next,
-              onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 12),
             TextFormField(
@@ -342,7 +312,6 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
               decoration: const InputDecoration(labelText: 'CST Number'),
               textInputAction: TextInputAction.done,
               onFieldSubmitted: (_) => _submit(),
-              onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 24),
             FilledButton(
@@ -360,4 +329,9 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
       ),
     );
   }
+
+  Widget _sectionLabel(BuildContext context, String text) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text(text, style: Theme.of(context).textTheme.titleSmall),
+      );
 }

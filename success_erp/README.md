@@ -1,93 +1,118 @@
 # Order Fulfillment & Billing Manager
 
-A lightweight ERP Flutter app for managing Customers, Products, Purchase Orders, Delivery Notes, and Invoices — using Google Sheets as the data store.
+A Flutter Android app covering the Order-to-Cash cycle for a job-work /
+metal-fabrication business: **Customer → Product → Purchase Order → Delivery
+Note → Invoice → Reports**.
 
-## Setup (5 minutes, no Firebase, no SHA-1)
+**`AGENTS.md` is the source of truth for behaviour.** This file only covers
+setup and layout.
 
-### 1. Create a Google Cloud Project
+## Storage backend
 
-1. Go to [console.cloud.google.com](https://console.cloud.google.com)
-2. Create a new project (or use an existing one)
+**Microsoft OneDrive.** A single Excel workbook, `ERP_App_Data.xlsx`, in the
+app's own OneDrive folder (app-folder scope only — the app cannot see the rest
+of your OneDrive). One worksheet per entity, each a real Excel Table, accessed
+through Microsoft Graph's table/row endpoints.
 
-### 2. Enable APIs
+Rows are read and written through the table's own header row, so adding a column
+never shifts existing data and older workbooks keep working: unknown columns are
+appended to the header on first run and missing values read back as empty.
 
-1. Go to **APIs & Services > Library**
-2. Enable **Google Sheets API**
-3. Enable **Google Drive API**
+OneDrive is the only backend — the earlier Google Sheets implementation has been
+removed. Swapping clouds again would mean one new `WorkbookStore` +
+`StorageBackend` implementation and one changed provider in `lib/app.dart`;
+nothing above the repository layer knows which cloud it talks to.
+See AGENTS.md §2 and §12.
 
-### 3. Create a Web OAuth Client ID
+## Setup
 
-1. Go to **APIs & Services > OAuth consent screen**
-2. Choose **External**, fill in app name + your email, save
-3. Add scope: `https://www.googleapis.com/auth/drive.file` (or skip — it's requested at runtime)
-4. Add your Google email as a **Test user**
-5. Go to **APIs & Services > Credentials**
-6. Click **Create Credentials > OAuth client ID**
-7. Choose **Web application**
-8. Give it a name (e.g. "ERP App")
-9. Click **Create** — copy the **Client ID**
+### 1. Register the app with Microsoft
 
-### 4. Paste the Client ID into the App
+1. [Azure Portal](https://portal.azure.com) → **Microsoft Entra ID** → **App
+   registrations** → **New registration**.
+2. Name it anything. Under **Supported account types** choose
+   *Accounts in any organizational directory and personal Microsoft accounts*
+   (this matches the `common` tenant the app uses).
+3. **Register**, then go to **Authentication** → **Add a platform** →
+   **Mobile and desktop applications** → **Custom redirect URI**:
 
-Open `lib/core/services/sheets_service.dart` and replace:
+   ```
+   msauth.com.example.successerp://auth
+   ```
 
-```dart
-static const String _webClientId = 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com';
-```
+   This string must match `MicrosoftAuth.redirectUri` and the
+   `<data android:scheme>` in `android/app/src/main/AndroidManifest.xml`
+   exactly. Note there is **no underscore** — a URI scheme cannot contain one.
+4. Confirm **Allow public client flows** is enabled (Authentication → Advanced
+   settings). The app is a public client and uses PKCE, with no secret.
+5. **API permissions** → **Microsoft Graph** → *Delegated* →
+   `Files.ReadWrite.AppFolder` and `offline_access`. `offline_access` is not
+   optional: it is what issues the refresh token that keeps you signed in
+   across restarts.
+6. Copy the **Application (client) ID** from the Overview page.
 
-with the Client ID you just copied.
-
-### 5. Run the App
+### 2. Run
 
 ```bash
 flutter pub get
-flutter run
+flutter run --dart-define=MS_CLIENT_ID=<your-application-client-id>
 ```
 
-On first launch:
-1. Tap "Sign in with Google"
-2. Sign in with your Google account
-3. The app creates a spreadsheet named **ERP_App_Data** in your Drive with all 9 tabs
-4. A round-trip test writes a test customer and reads it back
-5. You land on the Dashboard
+The client id is read at build time, so it is not committed. Building without
+it leaves a placeholder and sign-in will fail.
 
-### 6. Verify
+On first launch, sign in with Microsoft. The app creates `ERP_App_Data.xlsx` in
+its OneDrive app folder with one worksheet and Excel Table per entity, and lands
+on the Dashboard. Afterwards the session is restored silently — see AGENTS.md §9
+for why that path is load-bearing and how it is tested.
 
-Open your Google Drive — you should see **ERP_App_Data** with tabs: Customers, Products, PurchaseOrders, PurchaseOrderItems, DeliveryNotes, DeliveryNoteItems, Invoices, InvoiceItems, Counters.
+Fill in **Settings → Company Profile** before printing anything: it is the
+letterhead on every Delivery Note and Invoice.
 
-## Tech Stack
+## Layout
 
-- **Flutter** (latest stable)
-- **google_sign_in** + **googleapis** (Sheets API v4)
-- **Riverpod** (state management)
-- **GoRouter** (navigation)
-- **PDF** + **Printing** (document generation)
-- **shimmer** (skeleton loading)
-- **share_plus** (CSV export)
+```
+lib/
+  app.dart                     startup stages, routing, provider wiring
+  core/
+    repository/                BaseRepository: row index + optimistic locking
+    services/
+      storage_backend.dart     auth contract the startup flow depends on
+      counter_helper.dart      PO/{S|L}{FY}/{seq} and simple sequences
+      invoice_math.dart        invoiceable qty, totals, PO status  (pure)
+      number_to_words.dart     Indian lakh/crore amount in words   (pure)
+      address_format.dart      address line assembly, "None/Blank" (pure)
+      pdf_common.dart          shared letterhead / party boxes / copies
+      pdf_share.dart           writes each copy as its own PDF file to share
+      workbook_store.dart      backend-neutral schema + row interface
+      onedrive_excel_service.dart  OneDrive/Graph backend (active)
+      microsoft_auth.dart      PKCE sign-in + silent refresh
+      secret_store.dart        keystore-backed refresh-token storage
+      blank_workbook.dart      builds a minimal valid .xlsx to upload
+    theming/, widgets/         ColorScheme, status pill, empty state, skeletons
+  features/<entity>/           model, repository, providers, screens, pdf
+```
 
-## Features (Phases 1–8)
+No UI or business logic touches a cloud API directly — everything goes through a
+repository over `WorkbookStore`, which is why swapping the backend was a
+one-constant change rather than a rewrite.
 
-| Phase | Feature |
-|-------|---------|
-| 1 | Google Sign-In, spreadsheet creation, round-trip test |
-| 2 | Customer CRUD (list, detail, form, search, empty state) |
-| 3 | Product CRUD (list, form, search by name/SKU) |
-| 4 | Purchase Orders (create with line items, counter helper, status tracking, referential integrity) |
-| 5 | Delivery recording (PO item updates, status recalculation, DN PDF) |
-| 6 | Invoice generation (partial invoicing, tax calculation, invoice PDF) |
-| 7 | Dashboard (summary cards), Reports (4 tabs with CSV export), Drawer navigation |
-| 8 | Per-row optimistic locking (conflict detection + dialog) |
+## Tests
 
-## Data Model
+```bash
+flutter test
+```
 
-| Tab | Key Columns |
-|------|-------------|
-| Customers | customer_id, name, phone, email, address, gst_number |
-| Products | product_id, name, sku, unit, price, tax_percent |
-| PurchaseOrders | po_id, po_number, customer_id, order_date, status |
-| PurchaseOrderItems | po_item_id, po_id, product_id, quantity, rate, delivered_qty, pending_qty |
-| DeliveryNotes | dn_id, dn_number, po_id, delivery_date |
-| DeliveryNoteItems | dn_item_id, dn_id, po_item_id, delivered_qty |
-| Invoices | invoice_id, invoice_number, po_id, invoice_date, total_amount, tax_amount, status |
-| InvoiceItems | invoice_item_id, invoice_id, product_id, quantity, rate, tax_percent, amount |
-| Counters | entity_name, last_number |
+| File | Covers |
+|------|--------|
+| `session_persistence_test.dart` | Five consecutive cold starts with zero Sign-In flash, plus every failure mode that must *not* show Sign-In (AGENTS.md §9) |
+| `invoice_math_test.dart` | Invoiceable vs pending quantity, zero-rate lines, CGST/SGST splits, PO status transitions |
+| `number_to_words_test.dart` | Indian numbering, paise rounding, large amounts |
+| `counter_helper_test.dart` | Financial-year derivation and per-(category, FY) PO sequences |
+| `delete_test.dart` | Single and bulk delete across customers, products, POs and invoices: cascades, invoice protection, PO status roll-back, partial batches, referential integrity |
+| `onedrive_store_test.dart` | Workbook/table setup, app-folder-only access, row addressing, blank-in-place deletes, Graph throttling |
+| `onedrive_session_test.dart` | §9 re-proved on the Microsoft auth stack: 5 cold starts, offline/locked-keystore vs revoked-token, scope discipline |
+| `onedrive_repository_test.dart` | Repository layer and business logic driven over the real OneDrive service |
+| `pdf_copies_test.dart` | Three separate single-page PDFs per document, file naming, Latin-1 safety |
+| `schema_test.dart` | Every model writes exactly its declared columns; old rows still read |
+| `address_format_test.dart` | Printed address assembly and "None/Blank" |

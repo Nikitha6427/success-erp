@@ -1,19 +1,70 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
-import '../../features/customers/customers_notifier.dart';
-import '../../features/purchase_orders/po_providers.dart';
-import '../../features/purchase_orders/models/purchase_order.dart';
-import '../../features/invoices/invoice_providers.dart';
-import '../../features/products/products_notifier.dart';
 import '../../core/services/csv_export.dart';
+import '../../core/widgets/app_drawer.dart';
 import '../../core/widgets/empty_state.dart';
+import '../customers/customers_notifier.dart';
+import '../invoices/invoice_providers.dart';
+import '../invoices/models/invoice.dart';
+import '../products/products_notifier.dart';
+import '../purchase_orders/models/purchase_order.dart';
+import '../purchase_orders/po_providers.dart';
 
-class ReportsScreen extends ConsumerWidget {
+/// Inclusive date range. Reports default to the current month (AGENTS.md §5).
+class DateRange {
+  final DateTime from;
+  final DateTime to;
+
+  const DateRange(this.from, this.to);
+
+  factory DateRange.currentMonth() {
+    final now = DateTime.now();
+    return DateRange(
+      DateTime(now.year, now.month, 1),
+      DateTime(now.year, now.month + 1, 0),
+    );
+  }
+
+  /// Inclusive of the whole `to` day, so an invoice raised this afternoon is
+  /// not filtered out by a range ending today.
+  bool contains(String isoDate) {
+    if (isoDate.trim().isEmpty) return false;
+    final parsed = DateTime.tryParse(isoDate);
+    if (parsed == null) return false;
+    final day = DateTime(parsed.year, parsed.month, parsed.day);
+    final start = DateTime(from.year, from.month, from.day);
+    final end = DateTime(to.year, to.month, to.day);
+    return !day.isBefore(start) && !day.isAfter(end);
+  }
+}
+
+class ReportsScreen extends ConsumerStatefulWidget {
   const ReportsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ReportsScreen> createState() => _ReportsScreenState();
+}
+
+class _ReportsScreenState extends ConsumerState<ReportsScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Reports are computed in-memory from repository data, so make sure that
+    // data is actually present even when this screen is opened directly.
+    Future.microtask(() async {
+      await ref.read(customersNotifierProvider.notifier).load();
+      await ref.read(productsNotifierProvider.notifier).load();
+      await ref.read(poNotifierProvider.notifier).load();
+      await ref.read(invoiceListProvider.notifier).load();
+      final items =
+          await ref.read(invoiceItemRepositoryProvider).loadAll();
+      if (mounted) ref.read(invoiceItemsCacheProvider.notifier).state = items;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return DefaultTabController(
       length: 4,
       child: Scaffold(
@@ -22,13 +73,14 @@ class ReportsScreen extends ConsumerWidget {
           bottom: const TabBar(
             isScrollable: true,
             tabs: [
-              Tab(text: 'Pending\nDeliveries'),
-              Tab(text: 'Sales by\nCustomer'),
-              Tab(text: 'Sales by\nProduct'),
-              Tab(text: 'Outstanding\nInvoices'),
+              Tab(text: 'Pending Deliveries'),
+              Tab(text: 'Sales by Customer'),
+              Tab(text: 'Sales by Product'),
+              Tab(text: 'Outstanding Invoices'),
             ],
           ),
         ),
+        drawer: const AppDrawer(currentPath: '/reports'),
         body: const TabBarView(
           children: [
             _PendingDeliveriesReport(),
@@ -42,89 +94,120 @@ class ReportsScreen extends ConsumerWidget {
   }
 }
 
-// ─── Date Range Filter Widget ────────────────────────────────────────────────
+/// InvoiceItems loaded once for the Sales-by-Product report.
+final invoiceItemsCacheProvider =
+    StateProvider<List<InvoiceItem>>((ref) => const []);
 
-class _DateRangeFilter extends StatefulWidget {
-  final DateTime? from;
-  final DateTime? to;
-  final ValueChanged<DateTime?> onFromChanged;
-  final ValueChanged<DateTime?> onToChanged;
+// ─── Shared scaffolding ──────────────────────────────────────────────────────
 
-  const _DateRangeFilter({
-    this.from,
-    this.to,
-    required this.onFromChanged,
-    required this.onToChanged,
+class _ReportShell extends StatelessWidget {
+  final DateRange range;
+  final ValueChanged<DateRange> onRangeChanged;
+  final VoidCallback onExport;
+  final Widget child;
+
+  const _ReportShell({
+    required this.range,
+    required this.onRangeChanged,
+    required this.onExport,
+    required this.child,
   });
 
-  @override
-  State<_DateRangeFilter> createState() => _DateRangeFilterState();
-}
-
-class _DateRangeFilterState extends State<_DateRangeFilter> {
-  Future<void> _pickFrom() async {
+  Future<void> _pick(BuildContext context, {required bool isFrom}) async {
     final picked = await showDatePicker(
       context: context,
-      initialDate: widget.from ?? DateTime.now(),
+      initialDate: isFrom ? range.from : range.to,
       firstDate: DateTime(2000),
-      lastDate: DateTime.now(),
+      lastDate: DateTime(2100),
     );
-    if (picked != null) widget.onFromChanged(picked);
-  }
-
-  Future<void> _pickTo() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: widget.to ?? DateTime.now(),
-      firstDate: widget.from ?? DateTime(2000),
-      lastDate: DateTime.now(),
+    if (picked == null) return;
+    onRangeChanged(
+      isFrom ? DateRange(picked, range.to) : DateRange(range.from, picked),
     );
-    if (picked != null) widget.onToChanged(picked);
   }
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Column(
       children: [
-        const Text('From:'),
-        const SizedBox(width: 8),
-        Expanded(
-          child: OutlinedButton(
-            onPressed: _pickFrom,
-            child: Text(
-              widget.from != null
-                  ? DateFormat.yMMMd().format(widget.from!)
-                  : 'Start date',
-            ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _pick(context, isFrom: true),
+                  icon: const Icon(Icons.calendar_today, size: 16),
+                  label: Text(DateFormat.yMMMd().format(range.from)),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                child: Text('to'),
+              ),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _pick(context, isFrom: false),
+                  icon: const Icon(Icons.calendar_today, size: 16),
+                  label: Text(DateFormat.yMMMd().format(range.to)),
+                ),
+              ),
+            ],
           ),
         ),
-        const SizedBox(width: 8),
-        const Text('To:'),
-        const SizedBox(width: 8),
-        Expanded(
-          child: OutlinedButton(
-            onPressed: _pickTo,
-            child: Text(
-              widget.to != null
-                  ? DateFormat.yMMMd().format(widget.to!)
-                  : 'End date',
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            TextButton.icon(
+              onPressed: () => onRangeChanged(DateRange.currentMonth()),
+              icon: const Icon(Icons.restart_alt, size: 16),
+              label: const Text('This month'),
             ),
-          ),
+            TextButton.icon(
+              onPressed: onExport,
+              icon: const Icon(Icons.download, size: 16),
+              label: const Text('Export CSV'),
+            ),
+          ],
         ),
-        IconButton(
-          icon: const Icon(Icons.close, size: 18),
-          onPressed: () {
-            widget.onFromChanged(null);
-            widget.onToChanged(null);
-          },
-          tooltip: 'Clear filter',
-        ),
+        Expanded(child: child),
       ],
     );
   }
 }
 
-// ─── Pending Deliveries ──────────────────────────────────────────────────────
+Widget _amountList(
+  BuildContext context,
+  List<MapEntry<String, double>> entries,
+  String emptyMessage,
+  IconData emptyIcon,
+) {
+  if (entries.isEmpty) {
+    return EmptyState(icon: emptyIcon, message: emptyMessage);
+  }
+  final money = NumberFormat.currency(locale: 'en_IN', symbol: '₹');
+  return ListView.builder(
+    itemCount: entries.length,
+    itemBuilder: (context, index) {
+      final entry = entries[index];
+      return Card(
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        child: ListTile(
+          title: Text(entry.key),
+          trailing: Text(
+            money.format(entry.value),
+            style: Theme.of(context)
+                .textTheme
+                .titleSmall
+                ?.copyWith(fontWeight: FontWeight.bold),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+// ─── Pending deliveries ──────────────────────────────────────────────────────
 
 class _PendingDeliveriesReport extends ConsumerStatefulWidget {
   const _PendingDeliveriesReport();
@@ -136,102 +219,64 @@ class _PendingDeliveriesReport extends ConsumerStatefulWidget {
 
 class _PendingDeliveriesReportState
     extends ConsumerState<_PendingDeliveriesReport> {
-  DateTime? _from;
-  DateTime? _to;
+  DateRange _range = DateRange.currentMonth();
 
   @override
   Widget build(BuildContext context) {
-    final pos = ref.watch(poNotifierProvider).orders;
     final customers = ref.watch(customersNotifierProvider).customers;
-    final customerMap = {for (final c in customers) c.id: c.name};
+    final customerById = {for (final c in customers) c.id: c.name};
 
-    var pending = pos.where((po) =>
-        po.status == 'Pending' || po.status == 'Partially Delivered').toList();
+    final pending = ref
+        .watch(poNotifierProvider)
+        .orders
+        .where((po) =>
+            (po.status == PurchaseOrder.statusPending ||
+                po.status == PurchaseOrder.statusPartiallyDelivered) &&
+            _range.contains(po.orderDate))
+        .toList();
 
-    // Filter by date range
-    if (_from != null) {
-      pending = pending.where((po) {
-        try {
-          return !DateTime.parse(po.orderDate).isBefore(_from!);
-        } catch (_) {
-          return true;
-        }
-      }).toList();
-    }
-    if (_to != null) {
-      pending = pending.where((po) {
-        try {
-          return !DateTime.parse(po.orderDate).isAfter(_to!);
-        } catch (_) {
-          return true;
-        }
-      }).toList();
-    }
-
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(8),
-          child: _DateRangeFilter(
-            from: _from,
-            to: _to,
-            onFromChanged: (d) => setState(() => _from = d),
-            onToChanged: (d) => setState(() => _to = d),
-          ),
-        ),
-        Align(
-          alignment: Alignment.centerRight,
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: TextButton.icon(
-              onPressed: () => _exportPendingDeliveries(pending, customerMap),
-              icon: const Icon(Icons.download, size: 16),
-              label: const Text('Export CSV'),
+    return _ReportShell(
+      range: _range,
+      onRangeChanged: (r) => setState(() => _range = r),
+      onExport: () => CsvExport.export(
+        fileName: 'pending_deliveries',
+        headers: ['PO Number', 'Customer', 'Status', 'Order Date'],
+        rows: pending
+            .map((po) => [
+                  po.poNumber,
+                  customerById[po.customerId] ?? 'Unknown',
+                  po.status,
+                  po.orderDate,
+                ])
+            .toList(),
+      ),
+      child: pending.isEmpty
+          ? const EmptyState(
+              icon: Icons.local_shipping_outlined,
+              message: 'No pending deliveries in this range',
+            )
+          : ListView.builder(
+              itemCount: pending.length,
+              itemBuilder: (context, index) {
+                final po = pending[index];
+                return Card(
+                  margin:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  child: ListTile(
+                    title: Text(
+                      '${po.poNumber} — '
+                      '${customerById[po.customerId] ?? "Unknown"}',
+                    ),
+                    subtitle: Text('Status: ${po.status}'),
+                  ),
+                );
+              },
             ),
-          ),
-        ),
-        Expanded(
-          child: pending.isEmpty
-              ? const EmptyState(
-                  icon: Icons.local_shipping_outlined,
-                  message: 'No pending deliveries in this range',
-                )
-              : ListView.builder(
-                  itemCount: pending.length,
-                  itemBuilder: (context, index) {
-                    final po = pending[index];
-                    final name = customerMap[po.customerId] ?? 'Unknown';
-                    return Card(
-                      margin: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 4),
-                      child: ListTile(
-                        title: Text('${po.poNumber} — $name'),
-                        subtitle: Text('Status: ${po.status}'),
-                      ),
-                    );
-                  },
-                ),
-        ),
-      ],
-    );
-  }
-
-  void _exportPendingDeliveries(
-      List<PurchaseOrder> pos, Map<String, String> customerMap) {
-    CsvExport.export(
-      fileName: 'pending_deliveries',
-      headers: ['PO Number', 'Customer', 'Status', 'Order Date'],
-      rows: pos.map((po) => [
-        po.poNumber,
-        customerMap[po.customerId] ?? 'Unknown',
-        po.status,
-        po.orderDate,
-      ]).toList(),
     );
   }
 }
 
-// ─── Sales by Customer ──────────────────────────────────────────────────────
+// ─── Sales by customer ───────────────────────────────────────────────────────
 
 class _SalesByCustomerReport extends ConsumerStatefulWidget {
   const _SalesByCustomerReport();
@@ -241,108 +286,43 @@ class _SalesByCustomerReport extends ConsumerStatefulWidget {
       _SalesByCustomerReportState();
 }
 
-class _SalesByCustomerReportState extends ConsumerState<_SalesByCustomerReport> {
-  DateTime? _from;
-  DateTime? _to;
+class _SalesByCustomerReportState
+    extends ConsumerState<_SalesByCustomerReport> {
+  DateRange _range = DateRange.currentMonth();
 
   @override
   Widget build(BuildContext context) {
-    final invoices = ref.watch(invoiceListProvider);
+    final invoices = ref.watch(invoiceListProvider).invoices;
     final customers = ref.watch(customersNotifierProvider).customers;
     final pos = ref.watch(poNotifierProvider).orders;
+    final customerById = {for (final c in customers) c.id: c.name};
+    final poById = {for (final po in pos) po.id: po};
 
-    var filtered = invoices;
-    if (_from != null) {
-      filtered = filtered.where((inv) {
-        try {
-          return !DateTime.parse(inv.invoiceDate).isBefore(_from!);
-        } catch (_) {
-          return true;
-        }
-      }).toList();
+    final totals = <String, double>{};
+    for (final inv in invoices) {
+      if (!_range.contains(inv.invoiceDate)) continue;
+      final po = poById[inv.poId];
+      final name = customerById[po?.customerId ?? ''] ?? 'Unknown';
+      totals[name] = (totals[name] ?? 0) + inv.total;
     }
-    if (_to != null) {
-      filtered = filtered.where((inv) {
-        try {
-          return !DateTime.parse(inv.invoiceDate).isAfter(_to!);
-        } catch (_) {
-          return true;
-        }
-      }).toList();
-    }
-
-    final salesByCustomer = <String, double>{};
-    for (final inv in filtered) {
-      final po = pos.where((p) => p.id == inv.poId).firstOrNull;
-      final customer =
-          customers.where((c) => c.id == (po?.customerId ?? '')).firstOrNull;
-      final name = customer?.name ?? 'Unknown';
-      final amount = double.tryParse(inv.totalAmount) ?? 0;
-      salesByCustomer[name] = (salesByCustomer[name] ?? 0) + amount;
-    }
-
-    final sorted = salesByCustomer.entries.toList()
+    final sorted = totals.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
 
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(8),
-          child: _DateRangeFilter(
-            from: _from,
-            to: _to,
-            onFromChanged: (d) => setState(() => _from = d),
-            onToChanged: (d) => setState(() => _to = d),
-          ),
-        ),
-        Align(
-          alignment: Alignment.centerRight,
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: TextButton.icon(
-              onPressed: () => CsvExport.export(
-                fileName: 'sales_by_customer',
-                headers: ['Customer', 'Total Sales'],
-                rows: sorted.map((e) => [e.key, e.value.toStringAsFixed(2)]).toList(),
-              ),
-              icon: const Icon(Icons.download, size: 16),
-              label: const Text('Export CSV'),
-            ),
-          ),
-        ),
-        Expanded(
-          child: sorted.isEmpty
-              ? const EmptyState(
-                  icon: Icons.people_outline,
-                  message: 'No sales data in this range',
-                )
-              : ListView.builder(
-                  itemCount: sorted.length,
-                  itemBuilder: (context, index) {
-                    final entry = sorted[index];
-                    return Card(
-                      margin: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 4),
-                      child: ListTile(
-                        title: Text(entry.key),
-                        trailing: Text(
-                          entry.value.toStringAsFixed(2),
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleSmall
-                              ?.copyWith(fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-        ),
-      ],
+    return _ReportShell(
+      range: _range,
+      onRangeChanged: (r) => setState(() => _range = r),
+      onExport: () => CsvExport.export(
+        fileName: 'sales_by_customer',
+        headers: ['Customer', 'Total Sales'],
+        rows: sorted.map((e) => [e.key, e.value.toStringAsFixed(2)]).toList(),
+      ),
+      child: _amountList(context, sorted, 'No sales data in this range',
+          Icons.people_outline),
     );
   }
 }
 
-// ─── Sales by Product ───────────────────────────────────────────────────────
+// ─── Sales by product ────────────────────────────────────────────────────────
 
 class _SalesByProductReport extends ConsumerStatefulWidget {
   const _SalesByProductReport();
@@ -353,172 +333,46 @@ class _SalesByProductReport extends ConsumerStatefulWidget {
 }
 
 class _SalesByProductReportState extends ConsumerState<_SalesByProductReport> {
-  DateTime? _from;
-  DateTime? _to;
+  DateRange _range = DateRange.currentMonth();
 
   @override
   Widget build(BuildContext context) {
-    final invoices = ref.watch(invoiceListProvider);
+    final invoices = ref.watch(invoiceListProvider).invoices;
+    final items = ref.watch(invoiceItemsCacheProvider);
     final products = ref.watch(productsNotifierProvider).products;
-    final productMap = {for (final p in products) p.id: p.name};
+    final productById = {for (final p in products) p.id: p.name};
 
-    var filtered = invoices;
-    if (_from != null) {
-      filtered = filtered.where((inv) {
-        try {
-          return !DateTime.parse(inv.invoiceDate).isBefore(_from!);
-        } catch (_) {
-          return true;
-        }
-      }).toList();
+    final invoiceIdsInRange = invoices
+        .where((inv) => _range.contains(inv.invoiceDate))
+        .map((inv) => inv.id)
+        .toSet();
+
+    final totals = <String, double>{};
+    for (final item in items) {
+      if (!invoiceIdsInRange.contains(item.invoiceId)) continue;
+      final name = item.productId.isEmpty
+          ? item.description // flat charge
+          : (productById[item.productId] ?? 'Unknown');
+      totals[name] = (totals[name] ?? 0) + item.amt;
     }
-    if (_to != null) {
-      filtered = filtered.where((inv) {
-        try {
-          return !DateTime.parse(inv.invoiceDate).isAfter(_to!);
-        } catch (_) {
-          return true;
-        }
-      }).toList();
-    }
+    final sorted = totals.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
 
-    final invoiceIds = filtered.map((i) => i.id).toSet();
-
-    return _SalesByProductBody(
-      filteredInvoices: filtered,
-      invoiceIds: invoiceIds,
-      productMap: productMap,
-      from: _from,
-      to: _to,
-      onFromChanged: (d) => setState(() => _from = d),
-      onToChanged: (d) => setState(() => _to = d),
+    return _ReportShell(
+      range: _range,
+      onRangeChanged: (r) => setState(() => _range = r),
+      onExport: () => CsvExport.export(
+        fileName: 'sales_by_product',
+        headers: ['Product', 'Total Sales'],
+        rows: sorted.map((e) => [e.key, e.value.toStringAsFixed(2)]).toList(),
+      ),
+      child: _amountList(context, sorted, 'No sales data in this range',
+          Icons.inventory_2_outlined),
     );
   }
 }
 
-class _SalesByProductBody extends ConsumerStatefulWidget {
-  final List<dynamic> filteredInvoices;
-  final Set<String> invoiceIds;
-  final Map<String, String> productMap;
-  final DateTime? from;
-  final DateTime? to;
-  final ValueChanged<DateTime?> onFromChanged;
-  final ValueChanged<DateTime?> onToChanged;
-
-  const _SalesByProductBody({
-    required this.filteredInvoices,
-    required this.invoiceIds,
-    required this.productMap,
-    this.from,
-    this.to,
-    required this.onFromChanged,
-    required this.onToChanged,
-  });
-
-  @override
-  ConsumerState<_SalesByProductBody> createState() => _SalesByProductBodyState();
-}
-
-class _SalesByProductBodyState extends ConsumerState<_SalesByProductBody> {
-  List<MapEntry<String, double>> _salesByProduct = [];
-  bool _loaded = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final itemRepo = ref.read(invoiceItemRepositoryProvider);
-    final allItems = await itemRepo.loadAll();
-    final products = ref.read(productsNotifierProvider).products;
-    final productMap = {for (final p in products) p.id: p.name};
-
-    final sales = <String, double>{};
-    for (final item in allItems) {
-      if (widget.invoiceIds.contains(item.invoiceId)) {
-        final qty = double.tryParse(item.quantity) ?? 0;
-        final rate = double.tryParse(item.rate) ?? 0;
-        final amount = qty * rate;
-        final name = productMap[item.productId] ?? 'Unknown';
-        sales[name] = (sales[name] ?? 0) + amount;
-      }
-    }
-
-    final sorted = sales.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-
-    if (mounted) {
-      setState(() {
-        _salesByProduct = sorted;
-        _loaded = true;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(8),
-          child: _DateRangeFilter(
-            from: widget.from,
-            to: widget.to,
-            onFromChanged: widget.onFromChanged,
-            onToChanged: widget.onToChanged,
-          ),
-        ),
-        Align(
-          alignment: Alignment.centerRight,
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: TextButton.icon(
-              onPressed: () => CsvExport.export(
-                fileName: 'sales_by_product',
-                headers: ['Product', 'Total Sales'],
-                rows: _salesByProduct.map((e) => [e.key, e.value.toStringAsFixed(2)]).toList(),
-              ),
-              icon: const Icon(Icons.download, size: 16),
-              label: const Text('Export CSV'),
-            ),
-          ),
-        ),
-        Expanded(
-          child: !_loaded
-              ? const Center(child: CircularProgressIndicator())
-              : _salesByProduct.isEmpty
-                  ? const EmptyState(
-                      icon: Icons.inventory_2_outlined,
-                      message: 'No sales data in this range',
-                    )
-                  : ListView.builder(
-                      itemCount: _salesByProduct.length,
-                      itemBuilder: (context, index) {
-                        final entry = _salesByProduct[index];
-                        return Card(
-                          margin: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 4),
-                          child: ListTile(
-                            title: Text(entry.key),
-                            trailing: Text(
-                              entry.value.toStringAsFixed(2),
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleSmall
-                                  ?.copyWith(fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-        ),
-      ],
-    );
-  }
-}
-
-// ─── Outstanding Invoices ───────────────────────────────────────────────────
+// ─── Outstanding invoices ────────────────────────────────────────────────────
 
 class _OutstandingInvoicesReport extends ConsumerStatefulWidget {
   const _OutstandingInvoicesReport();
@@ -530,102 +384,90 @@ class _OutstandingInvoicesReport extends ConsumerStatefulWidget {
 
 class _OutstandingInvoicesReportState
     extends ConsumerState<_OutstandingInvoicesReport> {
-  DateTime? _from;
-  DateTime? _to;
+  DateRange _range = DateRange.currentMonth();
 
   @override
   Widget build(BuildContext context) {
-    final invoices = ref.watch(invoiceListProvider);
     final pos = ref.watch(poNotifierProvider).orders;
+    final poById = {for (final po in pos) po.id: po};
+    final money = NumberFormat.currency(locale: 'en_IN', symbol: '₹');
 
-    var unpaid = invoices.where((inv) => inv.status != 'Paid').toList();
+    final unpaid = ref
+        .watch(invoiceListProvider)
+        .invoices
+        .where((inv) => !inv.isPaid && _range.contains(inv.invoiceDate))
+        .toList();
+    final outstandingTotal =
+        unpaid.fold<double>(0, (sum, inv) => sum + inv.total);
 
-    if (_from != null) {
-      unpaid = unpaid.where((inv) {
-        try {
-          return !DateTime.parse(inv.invoiceDate).isBefore(_from!);
-        } catch (_) {
-          return true;
-        }
-      }).toList();
-    }
-    if (_to != null) {
-      unpaid = unpaid.where((inv) {
-        try {
-          return !DateTime.parse(inv.invoiceDate).isAfter(_to!);
-        } catch (_) {
-          return true;
-        }
-      }).toList();
-    }
-
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(8),
-          child: _DateRangeFilter(
-            from: _from,
-            to: _to,
-            onFromChanged: (d) => setState(() => _from = d),
-            onToChanged: (d) => setState(() => _to = d),
-          ),
-        ),
-        Align(
-          alignment: Alignment.centerRight,
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: TextButton.icon(
-              onPressed: () {
-                final rows = unpaid.map((inv) {
-                  final po = pos.where((p) => p.id == inv.poId).firstOrNull;
-                  return [
-                    inv.invoiceNumber,
-                    po?.poNumber ?? '',
-                    inv.totalAmount,
-                    inv.status,
-                  ];
-                }).toList();
-                CsvExport.export(
-                  fileName: 'outstanding_invoices',
-                  headers: ['Invoice', 'PO Number', 'Amount', 'Status'],
-                  rows: rows,
-                );
-              },
-              icon: const Icon(Icons.download, size: 16),
-              label: const Text('Export CSV'),
-            ),
-          ),
-        ),
-        Expanded(
-          child: unpaid.isEmpty
-              ? const EmptyState(
-                  icon: Icons.receipt_outlined,
-                  message: 'No outstanding invoices in this range',
-                )
-              : ListView.builder(
-                  itemCount: unpaid.length,
-                  itemBuilder: (context, index) {
-                    final inv = unpaid[index];
-                    final po = pos.where((p) => p.id == inv.poId).firstOrNull;
-                    return Card(
-                      margin: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 4),
-                      child: ListTile(
-                        title: Text('${inv.invoiceNumber} — PO: ${po?.poNumber ?? ''}'),
-                        subtitle: Text('Status: ${inv.status}'),
-                        trailing: Text(
-                          inv.totalAmount,
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleSmall
-                              ?.copyWith(fontWeight: FontWeight.bold),
-                        ),
+    return _ReportShell(
+      range: _range,
+      onRangeChanged: (r) => setState(() => _range = r),
+      onExport: () => CsvExport.export(
+        fileName: 'outstanding_invoices',
+        headers: ['Invoice', 'PO Number', 'Amount', 'Status', 'Invoice Date'],
+        rows: unpaid
+            .map((inv) => [
+                  inv.invoiceNumber,
+                  poById[inv.poId]?.poNumber ?? '',
+                  inv.totalAmount,
+                  inv.status,
+                  inv.invoiceDate,
+                ])
+            .toList(),
+      ),
+      child: unpaid.isEmpty
+          ? const EmptyState(
+              icon: Icons.receipt_outlined,
+              message: 'No outstanding invoices in this range',
+            )
+          : Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Total outstanding'),
+                      Text(
+                        money.format(outstandingTotal),
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(fontWeight: FontWeight.bold),
                       ),
-                    );
-                  },
+                    ],
+                  ),
                 ),
-        ),
-      ],
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: unpaid.length,
+                    itemBuilder: (context, index) {
+                      final inv = unpaid[index];
+                      return Card(
+                        margin: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 4),
+                        child: ListTile(
+                          title: Text(
+                            '${inv.invoiceNumber} — '
+                            'PO: ${poById[inv.poId]?.poNumber ?? ""}',
+                          ),
+                          subtitle: Text('Status: ${inv.status}'),
+                          trailing: Text(
+                            money.format(inv.total),
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleSmall
+                                ?.copyWith(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
     );
   }
 }

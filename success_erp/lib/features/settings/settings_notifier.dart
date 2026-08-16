@@ -17,8 +17,12 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
 
   Future<void> load() async {
     state = SettingsState(state.profile, true);
-    final profile = await _repo.load();
-    state = SettingsState(profile, false);
+    try {
+      final profile = await _repo.load();
+      state = SettingsState(profile, false);
+    } catch (_) {
+      state = SettingsState(state.profile, false);
+    }
   }
 
   Future<void> save(CompanyProfile profile) async {
@@ -27,11 +31,12 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
   }
 }
 
-final companyProfileRepositoryProvider = Provider<CompanyProfileRepository>((ref) {
-  return CompanyProfileRepository(ref.read(sheetsServiceProvider));
+final companyProfileRepositoryProvider =
+    Provider<CompanyProfileRepository>((ref) {
+  return CompanyProfileRepository(ref.watch(workbookStoreProvider));
 });
 
 final settingsNotifierProvider =
     StateNotifierProvider<SettingsNotifier, SettingsState>((ref) {
-  return SettingsNotifier(ref.read(companyProfileRepositoryProvider));
+  return SettingsNotifier(ref.watch(companyProfileRepositoryProvider));
 });

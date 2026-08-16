@@ -1,10 +1,39 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+/// Drawer navigation for the six top-level sections (AGENTS.md §7).
+///
+/// Every destination except Dashboard is pushed *on top of* a freshly reset
+/// Dashboard, so the stack stays exactly two deep no matter how many times the
+/// user hops between sections: back always returns to Dashboard, and back from
+/// Dashboard leaves the app. Without the reset, section-hopping piled up an
+/// unbounded stack the hardware back button had to unwind one screen at a time.
 class AppDrawer extends StatelessWidget {
   final String currentPath;
 
   const AppDrawer({required this.currentPath, super.key});
+
+  static const _destinations = <_Destination>[
+    _Destination('/', Icons.dashboard, 'Dashboard'),
+    _Destination('/customers', Icons.people, 'Customers'),
+    _Destination('/products', Icons.inventory_2, 'Products'),
+    _Destination('/purchase-orders', Icons.receipt_long, 'Purchase Orders'),
+    _Destination('/invoices', Icons.receipt_outlined, 'Invoices'),
+    _Destination('/reports', Icons.assessment, 'Reports'),
+    _Destination('/settings', Icons.settings, 'Settings'),
+  ];
+
+  void _navigate(BuildContext context, String path) {
+    Navigator.pop(context); // close the drawer
+    if (path == currentPath) return;
+    context.go('/');
+    if (path != '/') context.push(path);
+  }
+
+  bool _isSelected(String path) {
+    if (path == '/') return currentPath == '/';
+    return currentPath.startsWith(path);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +57,7 @@ class AppDrawer extends StatelessWidget {
                       width: 40,
                       height: 40,
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Icon(
+                      errorBuilder: (_, _, _) => Icon(
                         Icons.inventory_2,
                         size: 40,
                         color: theme.colorScheme.onPrimaryContainer,
@@ -46,7 +75,8 @@ class AppDrawer extends StatelessWidget {
                   Text(
                     'Order Fulfillment & Billing',
                     style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
+                      color: theme.colorScheme.onPrimaryContainer
+                          .withValues(alpha: 0.7),
                     ),
                   ),
                 ],
@@ -56,71 +86,18 @@ class AppDrawer extends StatelessWidget {
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 children: [
-                  _DrawerItem(
-                    icon: Icons.dashboard,
-                    label: 'Dashboard',
-                    selected: currentPath == '/',
-                    onTap: () {
-                      Navigator.pop(context);
-                      context.go('/');
-                    },
-                  ),
-                  _DrawerItem(
-                    icon: Icons.people,
-                    label: 'Customers',
-                    selected: currentPath.startsWith('/customers'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      context.push('/customers');
-                    },
-                  ),
-                  _DrawerItem(
-                    icon: Icons.inventory_2,
-                    label: 'Products',
-                    selected: currentPath.startsWith('/products'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      context.push('/products');
-                    },
-                  ),
-                  _DrawerItem(
-                    icon: Icons.receipt_long,
-                    label: 'Purchase Orders',
-                    selected: currentPath.startsWith('/purchase-orders'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      context.push('/purchase-orders');
-                    },
-                  ),
-                  _DrawerItem(
-                    icon: Icons.receipt_outlined,
-                    label: 'Invoices',
-                    selected: currentPath.startsWith('/invoices'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      context.push('/invoices');
-                    },
-                  ),
-                  const Divider(),
-                  _DrawerItem(
-                    icon: Icons.assessment,
-                    label: 'Reports',
-                    selected: currentPath.startsWith('/reports'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      context.push('/reports');
-                    },
-                  ),
-                  const Divider(),
-                  _DrawerItem(
-                    icon: Icons.settings,
-                    label: 'Settings',
-                    selected: currentPath.startsWith('/settings'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      context.push('/settings');
-                    },
-                  ),
+                  for (final d in _destinations) ...[
+                    if (d.path == '/reports' || d.path == '/settings')
+                      const Divider(),
+                    ListTile(
+                      leading: Icon(d.icon),
+                      title: Text(d.label),
+                      selected: _isSelected(d.path),
+                      selectedTileColor: theme.colorScheme.primaryContainer
+                          .withValues(alpha: 0.3),
+                      onTap: () => _navigate(context, d.path),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -131,27 +108,9 @@ class AppDrawer extends StatelessWidget {
   }
 }
 
-class _DrawerItem extends StatelessWidget {
+class _Destination {
+  final String path;
   final IconData icon;
   final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _DrawerItem({
-    required this.icon,
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      leading: Icon(icon),
-      title: Text(label),
-      selected: selected,
-      selectedTileColor: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.3),
-      onTap: onTap,
-    );
-  }
+  const _Destination(this.path, this.icon, this.label);
 }

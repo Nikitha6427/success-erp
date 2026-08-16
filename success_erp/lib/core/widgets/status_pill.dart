@@ -27,6 +27,11 @@ class StatusPill extends StatelessWidget {
         isDark ? const Color(0xFF3A1F4E) : const Color(0xFFF3E5F5),
         isDark ? const Color(0xFFCE93D8) : const Color(0xFF7B1FA2),
       ),
+      // Invoice payment status reuses the delivered green for "settled".
+      'Paid' => (
+        isDark ? const Color(0xFF1B3A20) : const Color(0xFFE8F5E9),
+        isDark ? const Color(0xFFA5D6A7) : const Color(0xFF2E7D32),
+      ),
       _ => (
         theme.colorScheme.surfaceContainerHighest,
         theme.colorScheme.onSurface,

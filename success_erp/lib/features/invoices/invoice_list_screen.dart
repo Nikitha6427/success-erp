@@ -5,9 +5,10 @@ import 'package:intl/intl.dart';
 import '../../core/widgets/app_drawer.dart';
 import '../../core/widgets/empty_state.dart';
 import '../../core/widgets/loading_list_skeleton.dart';
+import '../../core/widgets/selection_app_bar.dart';
+import '../../core/widgets/snack_bar_helper.dart';
 import '../../core/widgets/status_pill.dart';
-import '../../features/purchase_orders/po_providers.dart';
-import '../../features/customers/customers_notifier.dart';
+import '../purchase_orders/po_providers.dart';
 import 'models/invoice.dart';
 import 'invoice_providers.dart';
 
@@ -23,12 +24,21 @@ class _InvoiceListScreenState extends ConsumerState<InvoiceListScreen> {
   final _searchController = TextEditingController();
   String _query = '';
 
-  static const _statuses = ['All', 'Pending', 'Paid'];
+  final Set<String> _selected = {};
+  bool _selecting = false;
+  bool _isDeleting = false;
+
+  static const _statuses = ['All', Invoice.statusPending, Invoice.statusPaid];
 
   @override
   void initState() {
     super.initState();
-    Future.microtask(() => ref.read(invoiceListProvider.notifier).load());
+    Future.microtask(() {
+      ref.read(invoiceListProvider.notifier).load();
+      if (ref.read(poNotifierProvider).orders.isEmpty) {
+        ref.read(poNotifierProvider.notifier).load();
+      }
+    });
   }
 
   @override
@@ -37,94 +47,179 @@ class _InvoiceListScreenState extends ConsumerState<InvoiceListScreen> {
     super.dispose();
   }
 
+  // ── Selection ─────────────────────────────────────────────────────────────
+
+  void _exitSelection() => setState(() {
+        _selecting = false;
+        _selected.clear();
+      });
+
+  void _startSelection(String id) => setState(() {
+        _selecting = true;
+        _selected.add(id);
+      });
+
+  void _toggle(String id) => setState(() {
+        if (!_selected.remove(id)) _selected.add(id);
+        if (_selected.isEmpty) _selecting = false;
+      });
+
+  void _toggleSelectAll(List<Invoice> visible) => setState(() {
+        if (_selected.length == visible.length) {
+          _selected.clear();
+          _selecting = false;
+        } else {
+          _selected
+            ..clear()
+            ..addAll(visible.map((i) => i.id));
+        }
+      });
+
+  Future<void> _deleteSelected() async {
+    if (_selected.isEmpty || _isDeleting) return;
+    final ids = _selected.toList();
+    final notifier = ref.read(invoiceListProvider.notifier);
+
+    setState(() => _isDeleting = true);
+    try {
+      final impact = await notifier.impactFor(ids);
+      if (!mounted) return;
+
+      final confirmed = await confirmBulkDelete(
+        context,
+        count: ids.length,
+        singular: 'this invoice',
+        plural: 'invoices',
+        consequences: impact.consequences,
+      );
+      if (!confirmed || !mounted) return;
+
+      final outcome = await notifier.deleteMany(ids);
+      if (!mounted) return;
+      showSnackBar(
+        context,
+        outcome.summary('invoice', 'invoices'),
+        isError: outcome.deletedCount == 0,
+      );
+      _exitSelection();
+    } catch (e) {
+      if (mounted) showSnackBar(context, 'Delete failed: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _isDeleting = false);
+    }
+  }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final state = ref.watch(invoiceListProvider);
     final pos = ref.watch(poNotifierProvider).orders;
-    final poMap = {for (final po in pos) po.id: po.poNumber};
-    final customers = ref.watch(customersNotifierProvider).customers;
-    final customerMap = {for (final c in customers) c.id: c.name};
+    final poNumberById = {for (final po in pos) po.id: po.poNumber};
 
-    final isLoading = ref.watch(invoiceListLoadingProvider);
+    final q = _query.trim().toLowerCase();
+    final filtered = state.invoices.where((inv) {
+      final matchesStatus =
+          _statusFilter == 'All' || inv.status == _statusFilter;
+      if (!matchesStatus) return false;
+      if (q.isEmpty) return true;
+      final poNum = poNumberById[inv.poId]?.toLowerCase() ?? '';
+      return inv.invoiceNumber.toLowerCase().contains(q) || poNum.contains(q);
+    }).toList();
 
-    var filtered = state.where((inv) =>
-        _statusFilter == 'All' || inv.status == _statusFilter).toList();
-
-    if (_query.isNotEmpty) {
-      filtered = filtered.where((inv) {
-        final poNum = poMap[inv.poId]?.toLowerCase() ?? '';
-        return inv.invoiceNumber.toLowerCase().contains(_query) ||
-               poNum.contains(_query);
-      }).toList();
-    }
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('Invoices')),
-      drawer: AppDrawer(currentPath: '/invoices'),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: TextField(
-              controller: _searchController,
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search),
-                hintText: 'Search by invoice or PO number',
+    return PopScope(
+      canPop: !_selecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selecting) _exitSelection();
+      },
+      child: Scaffold(
+        appBar: _selecting
+            ? SelectionAppBar(
+                selectedCount: _selected.length,
+                totalCount: filtered.length,
+                onClose: _exitSelection,
+                onToggleSelectAll: () => _toggleSelectAll(filtered),
+                onDelete:
+                    _selected.isEmpty || _isDeleting ? null : _deleteSelected,
+              )
+            : AppBar(title: const Text('Invoices')),
+        drawer: _selecting ? null : const AppDrawer(currentPath: '/invoices'),
+        body: Column(
+          children: [
+            if (_isDeleting) const LinearProgressIndicator(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: TextField(
+                controller: _searchController,
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.search),
+                  hintText: 'Search by invoice or PO number',
+                ),
+                onChanged: (v) => setState(() => _query = v),
               ),
-              onChanged: (v) => setState(() => _query = v),
             ),
-          ),
-          SizedBox(
-            height: 40,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              itemCount: _statuses.length,
-              separatorBuilder: (_, context) => const SizedBox(width: 8),
-              itemBuilder: (context, i) {
-                final s = _statuses[i];
-                return FilterChip(
-                  label: Text(s),
-                  selected: _statusFilter == s,
-                  onSelected: (_) => setState(() => _statusFilter = s),
-                  showCheckmark: false,
-                );
-              },
+            SizedBox(
+              height: 40,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                itemCount: _statuses.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 8),
+                itemBuilder: (context, i) {
+                  final s = _statuses[i];
+                  return FilterChip(
+                    label: Text(s),
+                    selected: _statusFilter == s,
+                    onSelected: (_) => setState(() => _statusFilter = s),
+                    showCheckmark: false,
+                  );
+                },
+              ),
             ),
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 300),
-              child: _buildBody(state, filtered, poMap, customerMap, theme, isLoading),
+            const SizedBox(height: 8),
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: _buildBody(state, filtered, poNumberById, theme),
+              ),
             ),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => context.push('/invoices/new'),
-        tooltip: 'Create new invoice',
-        child: const Icon(Icons.add),
+          ],
+        ),
+        floatingActionButton: _selecting
+            ? null
+            : FloatingActionButton(
+                onPressed: () => context.push('/invoices/new'),
+                tooltip: 'Create new invoice',
+                child: const Icon(Icons.add),
+              ),
       ),
     );
   }
 
   Widget _buildBody(
-    List<Invoice> all,
+    InvoiceListState state,
     List<Invoice> filtered,
-    Map<String, String> poMap,
-    Map<String, String> customerMap,
+    Map<String, String> poNumberById,
     ThemeData theme,
-    bool isLoading,
   ) {
-    if (isLoading && all.isEmpty) {
+    if (state.isLoading && state.invoices.isEmpty) {
       return const LoadingListSkeleton();
     }
-    if (all.isEmpty) {
-      return const EmptyState(
+    if (state.error != null && state.invoices.isEmpty) {
+      return EmptyState(
+        icon: Icons.cloud_off,
+        message: "Couldn't load invoices.\n${state.error}",
+        ctaLabel: 'Retry',
+        onCta: () => ref.read(invoiceListProvider.notifier).load(),
+      );
+    }
+    if (state.invoices.isEmpty) {
+      return EmptyState(
         icon: Icons.receipt_outlined,
         message: 'No invoices yet',
+        ctaLabel: 'Create your first invoice',
+        onCta: () => context.push('/invoices/new'),
       );
     }
     if (filtered.isEmpty) {
@@ -138,28 +233,50 @@ class _InvoiceListScreenState extends ConsumerState<InvoiceListScreen> {
       itemCount: filtered.length,
       itemBuilder: (context, index) {
         final inv = filtered[index];
-        final poNumber = poMap[inv.poId] ?? '';
+        final poNumber = poNumberById[inv.poId] ?? '';
+        final selected = _selected.contains(inv.id);
         return Card(
+          color: selected ? theme.colorScheme.secondaryContainer : null,
           child: ListTile(
-            leading: Hero(
-              tag: 'invoice-${inv.id}',
+            leading: SelectionLeading(
+              selectionMode: _selecting,
+              selected: selected,
               child: CircleAvatar(
                 backgroundColor: theme.colorScheme.primaryContainer,
                 foregroundColor: theme.colorScheme.onPrimaryContainer,
                 child: const Icon(Icons.receipt_outlined),
               ),
             ),
-            title: Text(inv.invoiceNumber),
-            subtitle: Text('PO: $poNumber  •  ${_formatDate(inv.invoiceDate)}'),
+            title: Hero(
+              tag: 'invoice-${inv.id}',
+              child: Material(
+                color: Colors.transparent,
+                child: Text(inv.invoiceNumber),
+              ),
+            ),
+            subtitle: Text(
+              [
+                if (poNumber.isNotEmpty) 'PO: $poNumber',
+                _formatDate(inv.invoiceDate),
+              ].where((s) => s.isNotEmpty).join('  •  '),
+            ),
             trailing: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Text(inv.totalAmount, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold)),
+                Text(
+                  inv.totalAmount,
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(fontWeight: FontWeight.bold),
+                ),
                 StatusPill(status: inv.status),
               ],
             ),
-            onTap: () => context.push('/invoices/${inv.id}'),
+            onTap: () => _selecting
+                ? _toggle(inv.id)
+                : context.push('/invoices/${inv.id}'),
+            onLongPress: () =>
+                _selecting ? _toggle(inv.id) : _startSelection(inv.id),
           ),
         );
       },

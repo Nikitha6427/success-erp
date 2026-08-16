@@ -12,8 +12,7 @@ class ProductFormScreen extends ConsumerStatefulWidget {
   const ProductFormScreen({this.id, super.key});
 
   @override
-  ConsumerState<ProductFormScreen> createState() =>
-      _ProductFormScreenState();
+  ConsumerState<ProductFormScreen> createState() => _ProductFormScreenState();
 }
 
 class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
@@ -22,13 +21,10 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
   final _partNoController = TextEditingController();
   final _priceController = TextEditingController();
   final _taxController = TextEditingController();
-  final _hsnController = TextEditingController();
+  final _hsnSacController = TextEditingController();
+  final _otherUnitController = TextEditingController();
   String? _selectedCategory;
   String? _selectedUnit;
-  final _otherUnitController = TextEditingController();
-
-  static const _categories = ['Sales', 'Labour'];
-  static const _units = ['Nos', 'Kgs', 'Pcs', 'Box', 'Litre', 'Metre', 'Other'];
 
   bool _isSaving = false;
   Product? _existing;
@@ -37,44 +33,59 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
   void initState() {
     super.initState();
     if (widget.id != null) {
-      _existing = ref.read(productsNotifierProvider).products
-          .where((p) => p.id == widget.id)
-          .firstOrNull;
-      if (_existing != null) {
-        _nameController.text = _existing!.name;
-        _partNoController.text = _existing!.partNo;
-        _priceController.text = _existing!.price;
-        _taxController.text = _existing!.taxPercent;
-        _hsnController.text = _existing!.hsnCode;
-        _selectedCategory = _existing!.category;
-        if (_units.contains(_existing!.unit)) {
-          _selectedUnit = _existing!.unit;
-        } else if (_existing!.unit.isNotEmpty) {
-          _selectedUnit = 'Other';
-          _otherUnitController.text = _existing!.unit;
-        }
+      final found =
+          ref.read(productsNotifierProvider.notifier).findById(widget.id!);
+      if (found != null) {
+        _fill(found);
       } else {
-        Future.microtask(
-          () => ref.read(productsNotifierProvider.notifier).load(),
-        );
+        Future.microtask(() async {
+          await ref.read(productsNotifierProvider.notifier).load();
+          if (!mounted) return;
+          final p =
+              ref.read(productsNotifierProvider.notifier).findById(widget.id!);
+          if (p != null) setState(() => _fill(p));
+        });
       }
+    }
+  }
+
+  void _fill(Product p) {
+    _existing = p;
+    _nameController.text = p.name;
+    _partNoController.text = p.partNo;
+    _priceController.text = p.price;
+    _taxController.text = p.taxPercent;
+    _hsnSacController.text = p.hsnSac;
+    _selectedCategory =
+        Product.categories.contains(p.category) ? p.category : null;
+    if (Product.units.contains(p.unit)) {
+      _selectedUnit = p.unit;
+    } else if (p.unit.isNotEmpty) {
+      _selectedUnit = 'Other';
+      _otherUnitController.text = p.unit;
     }
   }
 
   @override
   void dispose() {
-    _nameController.dispose();
-    _partNoController.dispose();
-    _priceController.dispose();
-    _taxController.dispose();
-    _hsnController.dispose();
-    _otherUnitController.dispose();
+    for (final c in [
+      _nameController,
+      _partNoController,
+      _priceController,
+      _taxController,
+      _hsnSacController,
+      _otherUnitController,
+    ]) {
+      c.dispose();
+    }
     super.dispose();
   }
 
   String? _validateName(String? value) =>
       (value == null || value.trim().isEmpty) ? 'Name is required' : null;
 
+  /// Labour job-work lines are frequently ₹0, so zero is valid — only a
+  /// missing/negative/non-numeric price is rejected.
   String? _validatePrice(String? value) {
     if (value == null || value.trim().isEmpty) return 'Price is required';
     final v = double.tryParse(value.trim());
@@ -91,14 +102,21 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
     return null;
   }
 
+  String? _validateOtherUnit(String? value) {
+    if (_selectedUnit != 'Other') return null;
+    if (value == null || value.trim().isEmpty) return 'Specify the unit';
+    return null;
+  }
+
   bool get _isValid =>
       _validateName(_nameController.text) == null &&
       _validatePrice(_priceController.text) == null &&
       _validateTax(_taxController.text) == null &&
+      _validateOtherUnit(_otherUnitController.text) == null &&
       _selectedCategory != null;
 
   Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (!(_formKey.currentState?.validate() ?? false)) return;
     if (!_isValid || _isSaving) return;
     setState(() => _isSaving = true);
     try {
@@ -108,34 +126,22 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
           ? _otherUnitController.text.trim()
           : (_selectedUnit ?? '');
 
+      final base = (_existing ?? Product(id: '', name: '', createdAt: now))
+          .copyWith(
+        name: _nameController.text.trim(),
+        partNo: _partNoController.text.trim(),
+        category: _selectedCategory!,
+        unit: unit,
+        price: _priceController.text.trim(),
+        taxPercent: _taxController.text.trim(),
+        hsnSac: _hsnSacController.text.trim(),
+        updatedAt: now,
+      );
+
       if (_existing != null) {
-        await notifier.update(
-          _existing!.copyWith(
-            name: _nameController.text.trim(),
-            partNo: _partNoController.text.trim(),
-            unit: unit,
-            price: _priceController.text.trim(),
-            taxPercent: _taxController.text.trim(),
-            hsnCode: _hsnController.text.trim(),
-            category: _selectedCategory!,
-            updatedAt: now,
-          ),
-        );
+        await notifier.update(base);
       } else {
-        await notifier.add(
-          Product(
-            id: '',
-            name: _nameController.text.trim(),
-            partNo: _partNoController.text.trim(),
-            unit: unit,
-            price: _priceController.text.trim(),
-            taxPercent: _taxController.text.trim(),
-            createdAt: now,
-            updatedAt: now,
-            hsnCode: _hsnController.text.trim(),
-            category: _selectedCategory!,
-          ),
-        );
+        await notifier.add(base);
       }
       if (mounted) {
         showSnackBar(context, 'Product saved');
@@ -145,7 +151,12 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
       if (!mounted) return;
       final handled = await handleConflictError(context, e);
       if (!mounted) return;
-      if (!handled) showSnackBar(context, 'Save failed: $e', isError: true);
+      if (handled) {
+        await ref.read(productsNotifierProvider.notifier).load();
+        if (mounted) context.pop();
+      } else {
+        showSnackBar(context, 'Save failed: $e', isError: true);
+      }
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
@@ -157,8 +168,8 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Delete product?'),
         content: const Text(
-          'This will remove the product. (Purchase-order referential '
-          'integrity checks are added in a later phase.)',
+          'This removes the product permanently. Deletion is blocked if any '
+          'purchase order references it.',
         ),
         actions: [
           TextButton(
@@ -175,38 +186,66 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
         ],
       ),
     );
-    if (confirmed == true && mounted) {
+    if (confirmed != true || !mounted) return;
+    try {
       await ref.read(productsNotifierProvider.notifier).delete(widget.id!);
-      if (mounted) {
-        showSnackBar(context, 'Product deleted');
-        context.pop();
-      }
+      if (!mounted) return;
+      showSnackBar(context, 'Product deleted');
+      context.pop();
+    } catch (e) {
+      if (mounted) showSnackBar(context, '$e', isError: true);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final isEditing = _existing != null;
-    final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Hero(
-          tag: widget.id != null ? 'product-${widget.id}' : 'product-new',
-          child: Text(isEditing ? 'Edit Product' : 'Add Product'),
-        ),
+        title: Text(isEditing ? 'Edit Product' : 'Add Product'),
         actions: [
           if (isEditing)
             IconButton(
               icon: const Icon(Icons.delete_outline),
+              tooltip: 'Delete',
               onPressed: _confirmDelete,
             ),
         ],
       ),
       body: Form(
         key: _formKey,
+        autovalidateMode: AutovalidateMode.onUserInteraction,
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            if (isEditing) ...[
+              Center(
+                child: Hero(
+                  tag: 'product-${_existing!.id}',
+                  child: CircleAvatar(
+                    radius: 28,
+                    backgroundColor:
+                        Theme.of(context).colorScheme.secondaryContainer,
+                    foregroundColor:
+                        Theme.of(context).colorScheme.onSecondaryContainer,
+                    child: const Icon(Icons.inventory_2_outlined),
+                  ),
+                ),
+              ),
+              if (_existing!.productCode.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Center(
+                  child: Text(
+                    _existing!.productCode,
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.copyWith(color: Theme.of(context).colorScheme.primary),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+            ],
             TextFormField(
               controller: _nameController,
               decoration: const InputDecoration(labelText: 'Name *'),
@@ -217,58 +256,65 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
             const SizedBox(height: 16),
             TextFormField(
               controller: _partNoController,
-              decoration: const InputDecoration(labelText: 'Part No'),
+              decoration: const InputDecoration(
+                labelText: 'Part No',
+                helperText: 'Optional — does not have to be unique',
+              ),
               textInputAction: TextInputAction.next,
-              onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
               initialValue: _selectedCategory,
-              decoration: const InputDecoration(labelText: 'Category *'),
-              items: _categories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+              decoration: const InputDecoration(
+                labelText: 'Category *',
+                helperText: 'Sales = goods sold outright · '
+                    'Labour = job-work on customer material',
+              ),
+              items: Product.categories
+                  .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                  .toList(),
               onChanged: (v) => setState(() => _selectedCategory = v),
               validator: (v) => v == null ? 'Category is required' : null,
             ),
             const SizedBox(height: 16),
             TextFormField(
-              controller: _hsnController,
+              controller: _hsnSacController,
               decoration: InputDecoration(
-                labelText: _selectedCategory == 'Labour' ? 'SAC Code' : 'HSN Code',
+                labelText: Product.codeLabelFor(_selectedCategory),
               ),
               textInputAction: TextInputAction.next,
-              onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
               initialValue: _selectedUnit,
               decoration: const InputDecoration(labelText: 'Unit'),
-              items: _units.map((u) => DropdownMenuItem(value: u, child: Text(u))).toList(),
+              items: Product.units
+                  .map((u) => DropdownMenuItem(value: u, child: Text(u)))
+                  .toList(),
               onChanged: (v) => setState(() => _selectedUnit = v),
             ),
             if (_selectedUnit == 'Other') ...[
               const SizedBox(height: 12),
               TextFormField(
                 controller: _otherUnitController,
-                decoration: const InputDecoration(labelText: 'Specify unit'),
+                decoration: const InputDecoration(labelText: 'Specify unit *'),
+                validator: _validateOtherUnit,
                 textInputAction: TextInputAction.next,
+                onChanged: (_) => setState(() {}),
               ),
             ],
             const SizedBox(height: 16),
             TextFormField(
               controller: _priceController,
-              decoration: const InputDecoration(labelText: 'Price *'),
+              decoration: const InputDecoration(
+                labelText: 'Price *',
+                helperText: 'Labour lines are often ₹0 — that is allowed',
+              ),
               validator: _validatePrice,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               textInputAction: TextInputAction.next,
               onChanged: (_) => setState(() {}),
             ),
-            if (_priceController.text.isNotEmpty && _validatePrice(_priceController.text) != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                _validatePrice(_priceController.text)!,
-                style: TextStyle(color: theme.colorScheme.error, fontSize: 12),
-              ),
-            ],
             const SizedBox(height: 16),
             TextFormField(
               controller: _taxController,
@@ -279,13 +325,6 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
               onFieldSubmitted: (_) => _submit(),
               onChanged: (_) => setState(() {}),
             ),
-            if (_taxController.text.isNotEmpty && _validateTax(_taxController.text) != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                _validateTax(_taxController.text)!,
-                style: TextStyle(color: theme.colorScheme.error, fontSize: 12),
-              ),
-            ],
             const SizedBox(height: 24),
             FilledButton(
               onPressed: _isValid && !_isSaving ? _submit : null,

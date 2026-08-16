@@ -1,3 +1,4 @@
+import 'dart:developer' as dev;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app.dart';
 import 'models/delivery_note.dart';
@@ -9,23 +10,28 @@ class DnListNotifier extends StateNotifier<List<DeliveryNote>> {
   DnListNotifier(this._repo) : super(const []);
 
   Future<void> load() async {
-    state = await _repo.loadAll();
+    try {
+      state = await _repo.loadAll();
+    } catch (e) {
+      // Keep the last good list rather than crashing the caller
+      // (AGENTS.md §10).
+      dev.log('[DeliveryNotes] load failed: $e');
+    }
   }
 
-  Future<List<DeliveryNote>> loadByPoId(String poId) async {
-    return await _repo.loadByPoId(poId);
-  }
+  Future<List<DeliveryNote>> loadByPoId(String poId) =>
+      _repo.loadByPoId(poId);
 }
 
 final dnRepositoryProvider = Provider<DeliveryNoteRepository>((ref) {
-  return DeliveryNoteRepository(ref.read(sheetsServiceProvider));
+  return DeliveryNoteRepository(ref.watch(workbookStoreProvider));
 });
 
 final dnItemRepositoryProvider = Provider<DeliveryNoteItemRepository>((ref) {
-  return DeliveryNoteItemRepository(ref.read(sheetsServiceProvider));
+  return DeliveryNoteItemRepository(ref.watch(workbookStoreProvider));
 });
 
 final dnListProvider =
     StateNotifierProvider<DnListNotifier, List<DeliveryNote>>((ref) {
-  return DnListNotifier(ref.read(dnRepositoryProvider));
+  return DnListNotifier(ref.watch(dnRepositoryProvider));
 });

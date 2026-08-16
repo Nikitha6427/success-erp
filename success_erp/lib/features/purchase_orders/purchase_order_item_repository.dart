@@ -1,29 +1,22 @@
 import '../../core/repository/base_repository.dart';
-import '../../core/services/sheets_service.dart';
 import 'models/purchase_order.dart';
 
 class PurchaseOrderItemRepository extends BaseRepository<PurchaseOrderItem> {
-  PurchaseOrderItemRepository(super.sheetsService);
+  PurchaseOrderItemRepository(super.store);
 
   @override
-  String get tabName => 'PurchaseOrderItems';
+  String get tableName => 'PurchaseOrderItems';
 
   @override
-  List<String> get headers => SheetsService.tabHeaders['PurchaseOrderItems']!;
+  PurchaseOrderItem fromMap(Map<String, String> row) =>
+      PurchaseOrderItem.fromMap(row);
 
   @override
-  PurchaseOrderItem fromRow(List<String> row) => PurchaseOrderItem.fromRow(row);
-
-  @override
-  List<String> toRow(PurchaseOrderItem item) => item.toRow();
+  Map<String, String> toMap(PurchaseOrderItem item) => item.toMap();
 
   @override
   String getId(PurchaseOrderItem item) => item.id;
 
-  @override
-  int get updatedAtColumnIndex => headers.length - 1;
-
-  /// Returns all items belonging to a specific PO.
   Future<List<PurchaseOrderItem>> loadByPoId(String poId) async {
     final all = await loadAll();
     return all.where((item) => item.poId == poId).toList();
