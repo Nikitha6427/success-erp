@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app.dart';
+import '../../core/widgets/responsive_container.dart';
 import '../../core/widgets/app_drawer.dart';
 import '../../core/widgets/snack_bar_helper.dart';
 import 'models/company_profile.dart';
@@ -95,7 +96,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   String? _validatePincode(String? v) {
     if (v == null || v.trim().isEmpty) return null;
-    if (!RegExp(r'^\d{6}$').hasMatch(v.trim())) return 'Pincode must be 6 digits';
+    if (!RegExp(r'^\d{6}$').hasMatch(v.trim()))
+      return 'Pincode must be 6 digits';
     return null;
   }
 
@@ -178,153 +180,157 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       drawer: const AppDrawer(currentPath: '/settings'),
-      body: Form(
-        key: _formKey,
-        autovalidateMode: AutovalidateMode.onUserInteraction,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-          children: [
-            Text(
-              'Company Profile',
-              style: theme.textTheme.titleLarge
-                  ?.copyWith(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'These details are the letterhead on every Delivery Note and '
-              'Invoice.',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.outline),
-            ),
-            const SizedBox(height: 24),
-            TextFormField(
-              controller: _companyController,
-              decoration: const InputDecoration(labelText: 'Company Name *'),
-              validator: _validateCompany,
-              textInputAction: TextInputAction.next,
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 24),
-            _sectionLabel(theme, 'Address'),
-            TextFormField(
-              controller: _streetController,
-              decoration: const InputDecoration(labelText: 'Street'),
-              textInputAction: TextInputAction.next,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _areaController,
-              decoration: const InputDecoration(labelText: 'Area / Locality'),
-              textInputAction: TextInputAction.next,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _cityController,
-              decoration: const InputDecoration(labelText: 'City / District'),
-              textInputAction: TextInputAction.next,
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: _stateController,
-                    decoration: const InputDecoration(labelText: 'State'),
-                    textInputAction: TextInputAction.next,
-                  ),
+      body: ResponsiveContainer(
+        child: Form(
+          key: _formKey,
+          autovalidateMode: AutovalidateMode.onUserInteraction,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+            children: [
+              Text(
+                'Company Profile',
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.bold,
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextFormField(
-                    controller: _countryController,
-                    decoration: const InputDecoration(labelText: 'Country'),
-                    textInputAction: TextInputAction.next,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _pincodeController,
-              decoration: const InputDecoration(labelText: 'Pincode'),
-              validator: _validatePincode,
-              keyboardType: TextInputType.number,
-              textInputAction: TextInputAction.next,
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 24),
-            _sectionLabel(theme, 'Tax Info'),
-            TextFormField(
-              controller: _gstController,
-              decoration: const InputDecoration(labelText: 'GST Number'),
-              textInputAction: TextInputAction.next,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _tinController,
-              decoration: const InputDecoration(labelText: 'TIN Number'),
-              textInputAction: TextInputAction.next,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _cstController,
-              decoration: const InputDecoration(labelText: 'CST Number'),
-              textInputAction: TextInputAction.next,
-            ),
-            const SizedBox(height: 24),
-            _sectionLabel(theme, 'Contact'),
-            TextFormField(
-              controller: _phoneController,
-              decoration: const InputDecoration(labelText: 'Contact Number'),
-              keyboardType: TextInputType.phone,
-              textInputAction: TextInputAction.next,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _emailController,
-              decoration: const InputDecoration(labelText: 'Email'),
-              validator: _validateEmail,
-              keyboardType: TextInputType.emailAddress,
-              textInputAction: TextInputAction.next,
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _websiteController,
-              decoration: const InputDecoration(labelText: 'Website'),
-              textInputAction: TextInputAction.done,
-              onFieldSubmitted: (_) => _save(),
-            ),
-            const SizedBox(height: 32),
-            FilledButton(
-              onPressed: _isValid && !_isSaving ? _save : null,
-              child: _isSaving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Save Company Profile'),
-            ),
-            const SizedBox(height: 32),
-            const Divider(),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: _confirmSignOut,
-              icon: const Icon(Icons.logout),
-              label: const Text('Sign out'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: theme.colorScheme.error,
               ),
-            ),
-          ],
+              const SizedBox(height: 8),
+              Text(
+                'These details are the letterhead on every Delivery Note and '
+                'Invoice.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
+              const SizedBox(height: 24),
+              TextFormField(
+                controller: _companyController,
+                decoration: const InputDecoration(labelText: 'Company Name *'),
+                validator: _validateCompany,
+                textInputAction: TextInputAction.next,
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 24),
+              _sectionLabel(theme, 'Address'),
+              TextFormField(
+                controller: _streetController,
+                decoration: const InputDecoration(labelText: 'Street'),
+                textInputAction: TextInputAction.next,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _areaController,
+                decoration: const InputDecoration(labelText: 'Area / Locality'),
+                textInputAction: TextInputAction.next,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _cityController,
+                decoration: const InputDecoration(labelText: 'City / District'),
+                textInputAction: TextInputAction.next,
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _stateController,
+                      decoration: const InputDecoration(labelText: 'State'),
+                      textInputAction: TextInputAction.next,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _countryController,
+                      decoration: const InputDecoration(labelText: 'Country'),
+                      textInputAction: TextInputAction.next,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _pincodeController,
+                decoration: const InputDecoration(labelText: 'Pincode'),
+                validator: _validatePincode,
+                keyboardType: TextInputType.number,
+                textInputAction: TextInputAction.next,
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 24),
+              _sectionLabel(theme, 'Tax Info'),
+              TextFormField(
+                controller: _gstController,
+                decoration: const InputDecoration(labelText: 'GST Number'),
+                textInputAction: TextInputAction.next,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _tinController,
+                decoration: const InputDecoration(labelText: 'TIN Number'),
+                textInputAction: TextInputAction.next,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _cstController,
+                decoration: const InputDecoration(labelText: 'CST Number'),
+                textInputAction: TextInputAction.next,
+              ),
+              const SizedBox(height: 24),
+              _sectionLabel(theme, 'Contact'),
+              TextFormField(
+                controller: _phoneController,
+                decoration: const InputDecoration(labelText: 'Contact Number'),
+                keyboardType: TextInputType.phone,
+                textInputAction: TextInputAction.next,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _emailController,
+                decoration: const InputDecoration(labelText: 'Email'),
+                validator: _validateEmail,
+                keyboardType: TextInputType.emailAddress,
+                textInputAction: TextInputAction.next,
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _websiteController,
+                decoration: const InputDecoration(labelText: 'Website'),
+                textInputAction: TextInputAction.done,
+                onFieldSubmitted: (_) => _save(),
+              ),
+              const SizedBox(height: 32),
+              FilledButton(
+                onPressed: _isValid && !_isSaving ? _save : null,
+                child: _isSaving
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Save Company Profile'),
+              ),
+              const SizedBox(height: 32),
+              const Divider(),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _confirmSignOut,
+                icon: const Icon(Icons.logout),
+                label: const Text('Sign out'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: theme.colorScheme.error,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
   Widget _sectionLabel(ThemeData theme, String text) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Text(text, style: theme.textTheme.titleSmall),
-      );
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Text(text, style: theme.textTheme.titleSmall),
+  );
 }

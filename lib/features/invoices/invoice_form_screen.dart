@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/services/invoice_math.dart';
 import '../../core/services/number_to_words.dart';
+import '../../core/widgets/responsive_container.dart';
 import '../../core/widgets/document_copies_sheet.dart';
 import '../../core/widgets/snack_bar_helper.dart';
 import '../../core/widgets/empty_state.dart';
@@ -62,10 +63,12 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
   final _vehicleController = TextEditingController();
   final _transportController = TextEditingController();
   // AGENTS.md §4/§5: default 9% each, fully editable per invoice.
-  final _cgstController =
-      TextEditingController(text: Invoice.defaultCgstPercent);
-  final _sgstController =
-      TextEditingController(text: Invoice.defaultSgstPercent);
+  final _cgstController = TextEditingController(
+    text: Invoice.defaultCgstPercent,
+  );
+  final _sgstController = TextEditingController(
+    text: Invoice.defaultSgstPercent,
+  );
   final List<_FlatCharge> _flatCharges = [];
 
   DateTime _invoiceDate = DateTime.now();
@@ -103,8 +106,9 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
         await ref.read(settingsNotifierProvider.notifier).load();
       }
 
-      final invoicedByPoItem =
-          await ref.read(invoiceItemRepositoryProvider).invoicedQtyByPoItem();
+      final invoicedByPoItem = await ref
+          .read(invoiceItemRepositoryProvider)
+          .invoicedQtyByPoItem();
       final itemRepo = ref.read(poItemRepositoryProvider);
 
       if (widget.poId == null) {
@@ -114,13 +118,15 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
         final selectable = <PurchaseOrder>[];
         for (final po in pos) {
           final items = allItems.where((i) => i.poId == po.id);
-          final any = items.any((i) =>
-              InvoiceMath.needsInvoicing(i) &&
-              InvoiceMath.invoiceableQty(
-                    poItem: i,
-                    invoicedByPoItem: invoicedByPoItem,
-                  ) >
-                  0);
+          final any = items.any(
+            (i) =>
+                InvoiceMath.needsInvoicing(i) &&
+                InvoiceMath.invoiceableQty(
+                      poItem: i,
+                      invoicedByPoItem: invoicedByPoItem,
+                    ) >
+                    0,
+          );
           if (any) selectable.add(po);
         }
         if (!mounted) return;
@@ -132,7 +138,9 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
         return;
       }
 
-      final po = await ref.read(poNotifierProvider.notifier).findById(widget.poId!);
+      final po = await ref
+          .read(poNotifierProvider.notifier)
+          .findById(widget.poId!);
       final poItems = await itemRepo.loadByPoId(widget.poId!);
       final products = ref.read(productsNotifierProvider).products;
       final productById = {for (final p in products) p.id: p};
@@ -146,11 +154,13 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
           invoicedByPoItem: invoicedByPoItem,
         );
         if (qty <= 0) continue;
-        lines.add(_InvoiceableLine(
-          poItem: item,
-          product: productById[item.productId],
-          invoiceableQty: qty,
-        ));
+        lines.add(
+          _InvoiceableLine(
+            poItem: item,
+            product: productById[item.productId],
+            invoiceableQty: qty,
+          ),
+        );
         _qtyControllers.putIfAbsent(item.id, () => TextEditingController());
         _remarkControllers.putIfAbsent(item.id, () => TextEditingController());
       }
@@ -223,27 +233,29 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
       _lines.where((l) => _enteredQty(l) > 0).toList();
 
   InvoiceTotals get _totals => InvoiceTotals.from(
-        lineAmounts: [
-          for (final l in _selectedLines)
-            InvoiceMath.lineAmount(_enteredQty(l), l.poItem.rt),
-          for (final fc in _flatCharges)
-            if (fc.isComplete) fc.value,
-        ],
-        cgstPercent: _cgstPercent,
-        sgstPercent: _sgstPercent,
-      );
+    lineAmounts: [
+      for (final l in _selectedLines)
+        InvoiceMath.lineAmount(_enteredQty(l), l.poItem.rt),
+      for (final fc in _flatCharges)
+        if (fc.isComplete) fc.value,
+    ],
+    cgstPercent: _cgstPercent,
+    sgstPercent: _sgstPercent,
+  );
 
   bool get _isValid {
     if (_lines.any((l) => _qtyError(l) != null)) return false;
     if (_percentError(_cgstController) != null) return false;
     if (_percentError(_sgstController) != null) return false;
-    if (_flatCharges.any((fc) =>
-        (fc.description.text.trim().isNotEmpty || fc.amount.text.trim().isNotEmpty) &&
-        !fc.isComplete)) {
+    if (_flatCharges.any(
+      (fc) =>
+          (fc.description.text.trim().isNotEmpty ||
+              fc.amount.text.trim().isNotEmpty) &&
+          !fc.isComplete,
+    )) {
       return false;
     }
-    return _selectedLines.isNotEmpty ||
-        _flatCharges.any((fc) => fc.isComplete);
+    return _selectedLines.isNotEmpty || _flatCharges.any((fc) => fc.isComplete);
   }
 
   // ── Save ──────────────────────────────────────────────────────────────────
@@ -263,8 +275,7 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
       final poRepo = ref.read(poRepositoryProvider);
 
       final invoiceId = const Uuid().v4();
-      final invoiceNumber =
-          await counter.nextSimpleNumber('Invoice', 'INV');
+      final invoiceNumber = await counter.nextSimpleNumber('Invoice', 'INV');
 
       final invoice = Invoice(
         id: invoiceId,
@@ -299,8 +310,10 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
           hsnSac: line.product?.hsnSac ?? '',
           quantity: _n(qty),
           rate: line.poItem.rate,
-          amount:
-              InvoiceMath.lineAmount(qty, line.poItem.rt).toStringAsFixed(2),
+          amount: InvoiceMath.lineAmount(
+            qty,
+            line.poItem.rt,
+          ).toStringAsFixed(2),
           remarks: _remarkControllers[line.poItem.id]?.text.trim() ?? '',
         );
         await invoiceItemRepo.save(item);
@@ -330,10 +343,9 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
         poItems: _allPoItems,
         invoicedByPoItem: invoicedNow,
       )) {
-        await poRepo.update(_po!.copyWith(
-          status: PurchaseOrder.statusInvoiced,
-          updatedAt: now,
-        ));
+        await poRepo.update(
+          _po!.copyWith(status: PurchaseOrder.statusInvoiced, updatedAt: now),
+        );
       }
 
       await ref.read(poNotifierProvider.notifier).load();
@@ -447,31 +459,35 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Choose an order to invoice')),
-      body: _selectablePos.isEmpty
-          ? const EmptyState(
-              icon: Icons.receipt_outlined,
-              message: 'Nothing is ready to invoice yet.\n'
-                  'Record a delivery first.',
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: _selectablePos.length,
-              itemBuilder: (context, index) {
-                final po = _selectablePos[index];
-                return Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.receipt_long),
-                    title: Text(po.poNumber),
-                    subtitle:
-                        Text(customerById[po.customerId] ?? 'Unknown customer'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => context.pushReplacement(
-                      '/purchase-orders/${po.id}/invoice',
+      body: ResponsiveContainer(
+        child: _selectablePos.isEmpty
+            ? const EmptyState(
+                icon: Icons.receipt_outlined,
+                message:
+                    'Nothing is ready to invoice yet.\n'
+                    'Record a delivery first.',
+              )
+            : ListView.builder(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                itemCount: _selectablePos.length,
+                itemBuilder: (context, index) {
+                  final po = _selectablePos[index];
+                  return Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.receipt_long),
+                      title: Text(po.poNumber),
+                      subtitle: Text(
+                        customerById[po.customerId] ?? 'Unknown customer',
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => context.pushReplacement(
+                        '/purchase-orders/${po.id}/invoice',
+                      ),
                     ),
-                  ),
-                );
-              },
-            ),
+                  );
+                },
+              ),
+      ),
     );
   }
 
@@ -482,204 +498,223 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
 
     return Scaffold(
       appBar: AppBar(title: Text('Invoice · ${_po!.poNumber}')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        children: [
-          InkWell(
-            onTap: () async {
-              final picked = await showDatePicker(
-                context: context,
-                initialDate: _invoiceDate,
-                firstDate: DateTime(2000),
-                lastDate: DateTime(2100),
-              );
-              if (picked != null) setState(() => _invoiceDate = picked);
-            },
-            child: InputDecorator(
-              decoration: const InputDecoration(
-                labelText: 'Invoice date *',
-                suffixIcon: Icon(Icons.calendar_today, size: 18),
+      body: ResponsiveContainer(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          children: [
+            InkWell(
+              onTap: () async {
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: _invoiceDate,
+                  firstDate: DateTime(2000),
+                  lastDate: DateTime(2100),
+                );
+                if (picked != null) setState(() => _invoiceDate = picked);
+              },
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'Invoice date *',
+                  suffixIcon: Icon(Icons.calendar_today, size: 18),
+                ),
+                child: Text(DateFormat.yMMMd().format(_invoiceDate)),
               ),
-              child: Text(DateFormat.yMMMd().format(_invoiceDate)),
             ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _transportController,
-            decoration: const InputDecoration(labelText: 'Transportation Mode'),
-            textInputAction: TextInputAction.next,
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _vehicleController,
-            decoration: const InputDecoration(labelText: 'Vehicle Number'),
-            textInputAction: TextInputAction.next,
-          ),
-
-          const SizedBox(height: 24),
-          Text('Delivered & not yet invoiced',
-              style: theme.textTheme.titleMedium),
-          Text(
-            'Leave a line blank to bill it on a later invoice.',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.outline),
-          ),
-          const SizedBox(height: 12),
-          if (_lines.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 24),
-              child: EmptyState(
-                icon: Icons.inbox_outlined,
-                message: 'Nothing left to invoice on this order',
+            const SizedBox(height: 12),
+            TextField(
+              controller: _transportController,
+              decoration: const InputDecoration(
+                labelText: 'Transportation Mode',
               ),
-            )
-          else
-            ..._lines.map(_lineCard),
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _vehicleController,
+              decoration: const InputDecoration(labelText: 'Vehicle Number'),
+              textInputAction: TextInputAction.next,
+            ),
 
-          const SizedBox(height: 8),
-          Text('Additional charges', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          ..._flatCharges.asMap().entries.map((entry) {
-            final i = entry.key;
-            final fc = entry.value;
-            return Card(
-              margin: const EdgeInsets.only(bottom: 8),
+            const SizedBox(height: 24),
+            Text(
+              'Delivered & not yet invoiced',
+              style: theme.textTheme.titleMedium,
+            ),
+            Text(
+              'Leave a line blank to bill it on a later invoice.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (_lines.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: EmptyState(
+                  icon: Icons.inbox_outlined,
+                  message: 'Nothing left to invoice on this order',
+                ),
+              )
+            else
+              ..._lines.map(_lineCard),
+
+            const SizedBox(height: 8),
+            Text('Additional charges', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            ..._flatCharges.asMap().entries.map((entry) {
+              final i = entry.key;
+              final fc = entry.value;
+              return Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: fc.description,
+                          decoration: const InputDecoration(
+                            labelText: 'Charge description',
+                            isDense: true,
+                          ),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 110,
+                        child: TextField(
+                          controller: fc.amount,
+                          decoration: const InputDecoration(
+                            labelText: 'Amount',
+                            isDense: true,
+                          ),
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(
+                          Icons.remove_circle_outline,
+                          color: theme.colorScheme.error,
+                        ),
+                        tooltip: 'Remove charge',
+                        onPressed: () {
+                          fc.dispose();
+                          setState(() => _flatCharges.removeAt(i));
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+            TextButton.icon(
+              onPressed: () => setState(() => _flatCharges.add(_FlatCharge())),
+              icon: const Icon(Icons.add),
+              label: const Text('Add flat charge (no qty/rate)'),
+            ),
+
+            const SizedBox(height: 16),
+            Card(
               child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: TextField(
-                        controller: fc.description,
-                        decoration: const InputDecoration(
-                          labelText: 'Charge description',
-                          isDense: true,
+                    Text('Tax', style: theme.textTheme.titleSmall),
+                    const SizedBox(height: 12),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _cgstController,
+                            decoration: InputDecoration(
+                              labelText: 'CGST %',
+                              suffixText: '%',
+                              isDense: true,
+                              errorText: _percentError(_cgstController),
+                            ),
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
                         ),
-                        onChanged: (_) => setState(() {}),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 110,
-                      child: TextField(
-                        controller: fc.amount,
-                        decoration: const InputDecoration(
-                          labelText: 'Amount',
-                          isDense: true,
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: TextField(
+                            controller: _sgstController,
+                            decoration: InputDecoration(
+                              labelText: 'SGST %',
+                              suffixText: '%',
+                              isDense: true,
+                              errorText: _percentError(_sgstController),
+                            ),
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
                         ),
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
-                        onChanged: (_) => setState(() {}),
-                      ),
+                      ],
                     ),
-                    IconButton(
-                      icon: Icon(Icons.remove_circle_outline,
-                          color: theme.colorScheme.error),
-                      tooltip: 'Remove charge',
-                      onPressed: () {
-                        fc.dispose();
-                        setState(() => _flatCharges.removeAt(i));
-                      },
+                    const SizedBox(height: 12),
+                    _summaryRow('Subtotal', money.format(totals.subtotal)),
+                    _summaryRow(
+                      'CGST (${_trimPercent(totals.cgstPercent)}%)',
+                      money.format(totals.cgstAmount),
+                    ),
+                    _summaryRow(
+                      'SGST (${_trimPercent(totals.sgstPercent)}%)',
+                      money.format(totals.sgstAmount),
+                    ),
+                    const Divider(),
+                    _summaryRow(
+                      'Grand Total',
+                      money.format(totals.total),
+                      bold: true,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      NumberToWords.convert(totals.total),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontStyle: FontStyle.italic,
+                      ),
                     ),
                   ],
                 ),
               ),
-            );
-          }),
-          TextButton.icon(
-            onPressed: () => setState(() => _flatCharges.add(_FlatCharge())),
-            icon: const Icon(Icons.add),
-            label: const Text('Add flat charge (no qty/rate)'),
-          ),
-
-          const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Tax', style: theme.textTheme.titleSmall),
-                  const SizedBox(height: 12),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _cgstController,
-                          decoration: InputDecoration(
-                            labelText: 'CGST %',
-                            suffixText: '%',
-                            isDense: true,
-                            errorText: _percentError(_cgstController),
-                          ),
-                          keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true),
-                          onChanged: (_) => setState(() {}),
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: TextField(
-                          controller: _sgstController,
-                          decoration: InputDecoration(
-                            labelText: 'SGST %',
-                            suffixText: '%',
-                            isDense: true,
-                            errorText: _percentError(_sgstController),
-                          ),
-                          keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true),
-                          onChanged: (_) => setState(() {}),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  _summaryRow('Subtotal', money.format(totals.subtotal)),
-                  _summaryRow(
-                    'CGST (${_trimPercent(totals.cgstPercent)}%)',
-                    money.format(totals.cgstAmount),
-                  ),
-                  _summaryRow(
-                    'SGST (${_trimPercent(totals.sgstPercent)}%)',
-                    money.format(totals.sgstAmount),
-                  ),
-                  const Divider(),
-                  _summaryRow('Grand Total', money.format(totals.total),
-                      bold: true),
-                  const SizedBox(height: 8),
-                  Text(
-                    NumberToWords.convert(totals.total),
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(fontStyle: FontStyle.italic),
-                  ),
-                ],
-              ),
             ),
-          ),
 
-          const SizedBox(height: 24),
-          FilledButton(
-            onPressed: _isValid && !_isSaving ? _save : null,
-            child: _isSaving
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('Create Invoice'),
-          ),
-          if (!_isValid && !_isSaving)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                'Enter a quantity for at least one line, or add a flat charge.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: theme.colorScheme.error, fontSize: 12),
-              ),
+            const SizedBox(height: 24),
+            FilledButton(
+              onPressed: _isValid && !_isSaving ? _save : null,
+              child: _isSaving
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Create Invoice'),
             ),
-        ],
+            if (!_isValid && !_isSaving)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'Enter a quantity for at least one line, or add a flat charge.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: theme.colorScheme.error,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -694,8 +729,10 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(line.product?.name ?? 'Unknown',
-                style: theme.textTheme.titleSmall),
+            Text(
+              line.product?.name ?? 'Unknown',
+              style: theme.textTheme.titleSmall,
+            ),
             const SizedBox(height: 2),
             Text(
               'Invoiceable ${_n(line.invoiceableQty)} $unit  •  '
@@ -715,8 +752,9 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
                       isDense: true,
                       errorText: _qtyError(line),
                     ),
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     onChanged: (_) => setState(() {}),
                   ),
                 ),
@@ -756,7 +794,10 @@ class _InvoiceFormScreenState extends ConsumerState<InvoiceFormScreen> {
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [Text(label, style: style), Text(value, style: style)],
+        children: [
+          Text(label, style: style),
+          Text(value, style: style),
+        ],
       ),
     );
   }

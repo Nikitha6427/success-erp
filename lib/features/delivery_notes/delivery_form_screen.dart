@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/services/invoice_math.dart';
+import '../../core/widgets/responsive_container.dart';
 import '../../core/widgets/document_copies_sheet.dart';
 import '../../core/widgets/snack_bar_helper.dart';
 import '../../core/widgets/empty_state.dart';
@@ -48,9 +49,12 @@ class _DeliveryFormScreenState extends ConsumerState<DeliveryFormScreen> {
 
   Future<void> _loadPoItems() async {
     try {
-      final po = await ref.read(poNotifierProvider.notifier).findById(widget.poId);
-      final items =
-          await ref.read(poItemRepositoryProvider).loadByPoId(widget.poId);
+      final po = await ref
+          .read(poNotifierProvider.notifier)
+          .findById(widget.poId);
+      final items = await ref
+          .read(poItemRepositoryProvider)
+          .loadByPoId(widget.poId);
       final pending = items.where((i) => i.pending > 0).toList();
 
       for (final item in pending) {
@@ -132,33 +136,39 @@ class _DeliveryFormScreenState extends ConsumerState<DeliveryFormScreen> {
       final dnId = const Uuid().v4();
       final dnNumber = await counter.nextSimpleNumber('DeliveryNote', 'DN');
 
-      await dnRepo.save(DeliveryNote(
-        id: dnId,
-        dnNumber: dnNumber,
-        poId: widget.poId,
-        deliveryDate: _deliveryDate.toIso8601String(),
-        transportMode: _transportController.text.trim(),
-        vehicleNumber: _vehicleController.text.trim(),
-        createdAt: now,
-      ));
+      await dnRepo.save(
+        DeliveryNote(
+          id: dnId,
+          dnNumber: dnNumber,
+          poId: widget.poId,
+          deliveryDate: _deliveryDate.toIso8601String(),
+          transportMode: _transportController.text.trim(),
+          vehicleNumber: _vehicleController.text.trim(),
+          createdAt: now,
+        ),
+      );
 
       for (final item in selected) {
         final enteredQty = _enteredQty(item);
 
         // This row records the quantity delivered IN THIS NOTE only.
-        await dnItemRepo.save(DeliveryNoteItem(
-          id: const Uuid().v4(),
-          dnId: dnId,
-          poItemId: item.id,
-          deliveredQty: _n(enteredQty),
-          remarks: _remarkControllers[item.id]?.text.trim() ?? '',
-        ));
+        await dnItemRepo.save(
+          DeliveryNoteItem(
+            id: const Uuid().v4(),
+            dnId: dnId,
+            poItemId: item.id,
+            deliveredQty: _n(enteredQty),
+            remarks: _remarkControllers[item.id]?.text.trim() ?? '',
+          ),
+        );
 
-        await itemRepo.update(item.copyWith(
-          deliveredQty: _n(item.delivered + enteredQty),
-          pendingQty: _n(item.pending - enteredQty),
-          updatedAt: now,
-        ));
+        await itemRepo.update(
+          item.copyWith(
+            deliveredQty: _n(item.delivered + enteredQty),
+            pendingQty: _n(item.pending - enteredQty),
+            updatedAt: now,
+          ),
+        );
       }
 
       // Recalculate PO status from the freshly written item rows.
@@ -265,128 +275,140 @@ class _DeliveryFormScreenState extends ConsumerState<DeliveryFormScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Record Delivery')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        children: [
-          Text('PO: ${_po!.poNumber}', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 16),
-          InkWell(
-            onTap: () async {
-              final picked = await showDatePicker(
-                context: context,
-                initialDate: _deliveryDate,
-                firstDate: DateTime(2000),
-                lastDate: DateTime(2100),
-              );
-              if (picked != null) setState(() => _deliveryDate = picked);
-            },
-            child: InputDecorator(
-              decoration: const InputDecoration(
-                labelText: 'Delivery date *',
-                suffixIcon: Icon(Icons.calendar_today, size: 18),
+      body: ResponsiveContainer(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          children: [
+            Text('PO: ${_po!.poNumber}', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 16),
+            InkWell(
+              onTap: () async {
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: _deliveryDate,
+                  firstDate: DateTime(2000),
+                  lastDate: DateTime(2100),
+                );
+                if (picked != null) setState(() => _deliveryDate = picked);
+              },
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'Delivery date *',
+                  suffixIcon: Icon(Icons.calendar_today, size: 18),
+                ),
+                child: Text(DateFormat.yMMMd().format(_deliveryDate)),
               ),
-              child: Text(DateFormat.yMMMd().format(_deliveryDate)),
             ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _transportController,
-            decoration: const InputDecoration(labelText: 'Transportation Mode'),
-            textInputAction: TextInputAction.next,
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _vehicleController,
-            decoration: const InputDecoration(labelText: 'Vehicle Number'),
-            textInputAction: TextInputAction.next,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'Enter quantities for the items going out in this note. Leave a '
-            'line blank to keep it pending.',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.outline),
-          ),
-          const SizedBox(height: 16),
-          if (_pendingItems.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 32),
-              child: EmptyState(
-                icon: Icons.local_shipping_outlined,
-                message: 'No pending items to deliver',
+            const SizedBox(height: 12),
+            TextField(
+              controller: _transportController,
+              decoration: const InputDecoration(
+                labelText: 'Transportation Mode',
               ),
-            )
-          else
-            ..._pendingItems.map((item) {
-              final product = productById[item.productId];
-              return Card(
-                margin: const EdgeInsets.only(bottom: 12),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(product?.name ?? 'Unknown',
-                          style: theme.textTheme.titleSmall),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Ordered ${_n(item.qty)}  •  '
-                        'Delivered ${_n(item.delivered)}  •  '
-                        'Pending ${_n(item.pending)} ${product?.unit ?? ''}',
-                        style: theme.textTheme.bodySmall,
-                      ),
-                      if (item.remarks.isNotEmpty) ...[
-                        const SizedBox(height: 2),
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _vehicleController,
+              decoration: const InputDecoration(labelText: 'Vehicle Number'),
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Enter quantities for the items going out in this note. Leave a '
+              'line blank to keep it pending.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
+            const SizedBox(height: 16),
+            if (_pendingItems.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 32),
+                child: EmptyState(
+                  icon: Icons.local_shipping_outlined,
+                  message: 'No pending items to deliver',
+                ),
+              )
+            else
+              ..._pendingItems.map((item) {
+                final product = productById[item.productId];
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Text(
-                          'Order note: ${item.remarks}',
-                          style: theme.textTheme.bodySmall
-                              ?.copyWith(fontStyle: FontStyle.italic),
+                          product?.name ?? 'Unknown',
+                          style: theme.textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Ordered ${_n(item.qty)}  •  '
+                          'Delivered ${_n(item.delivered)}  •  '
+                          'Pending ${_n(item.pending)} ${product?.unit ?? ''}',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                        if (item.remarks.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            'Order note: ${item.remarks}',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _qtyControllers[item.id],
+                          decoration: InputDecoration(
+                            labelText: 'Delivering now',
+                            errorText: _qtyError(item),
+                          ),
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _remarkControllers[item.id],
+                          decoration: const InputDecoration(
+                            labelText: 'Remarks (optional)',
+                          ),
+                          textInputAction: TextInputAction.next,
                         ),
                       ],
-                      const SizedBox(height: 8),
-                      TextField(
-                        controller: _qtyControllers[item.id],
-                        decoration: InputDecoration(
-                          labelText: 'Delivering now',
-                          errorText: _qtyError(item),
-                        ),
-                        keyboardType:
-                            const TextInputType.numberWithOptions(decimal: true),
-                        onChanged: (_) => setState(() {}),
-                      ),
-                      const SizedBox(height: 8),
-                      TextField(
-                        controller: _remarkControllers[item.id],
-                        decoration: const InputDecoration(
-                          labelText: 'Remarks (optional)',
-                        ),
-                        textInputAction: TextInputAction.next,
-                      ),
-                    ],
+                    ),
+                  ),
+                );
+              }),
+            if (_pendingItems.isNotEmpty && _selectedItems.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4, bottom: 8),
+                child: Text(
+                  'Enter a quantity for at least one item.',
+                  style: TextStyle(
+                    color: theme.colorScheme.error,
+                    fontSize: 12,
                   ),
                 ),
-              );
-            }),
-          if (_pendingItems.isNotEmpty && _selectedItems.isEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 4, bottom: 8),
-              child: Text(
-                'Enter a quantity for at least one item.',
-                style: TextStyle(color: theme.colorScheme.error, fontSize: 12),
               ),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: _isValid && !_isSaving ? _save : null,
+              child: _isSaving
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Save & Generate DN'),
             ),
-          const SizedBox(height: 16),
-          FilledButton(
-            onPressed: _isValid && !_isSaving ? _save : null,
-            child: _isSaving
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('Save & Generate DN'),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

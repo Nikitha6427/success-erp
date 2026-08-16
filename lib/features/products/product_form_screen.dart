@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/widgets/responsive_container.dart';
 import '../../core/widgets/snack_bar_helper.dart';
 import '../../core/widgets/conflict_dialog.dart';
 import 'models/product.dart';
@@ -33,16 +34,18 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
   void initState() {
     super.initState();
     if (widget.id != null) {
-      final found =
-          ref.read(productsNotifierProvider.notifier).findById(widget.id!);
+      final found = ref
+          .read(productsNotifierProvider.notifier)
+          .findById(widget.id!);
       if (found != null) {
         _fill(found);
       } else {
         Future.microtask(() async {
           await ref.read(productsNotifierProvider.notifier).load();
           if (!mounted) return;
-          final p =
-              ref.read(productsNotifierProvider.notifier).findById(widget.id!);
+          final p = ref
+              .read(productsNotifierProvider.notifier)
+              .findById(widget.id!);
           if (p != null) setState(() => _fill(p));
         });
       }
@@ -56,8 +59,9 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
     _priceController.text = p.price;
     _taxController.text = p.taxPercent;
     _hsnSacController.text = p.hsnSac;
-    _selectedCategory =
-        Product.categories.contains(p.category) ? p.category : null;
+    _selectedCategory = Product.categories.contains(p.category)
+        ? p.category
+        : null;
     if (Product.units.contains(p.unit)) {
       _selectedUnit = p.unit;
     } else if (p.unit.isNotEmpty) {
@@ -128,15 +132,15 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
 
       final base = (_existing ?? Product(id: '', name: '', createdAt: now))
           .copyWith(
-        name: _nameController.text.trim(),
-        partNo: _partNoController.text.trim(),
-        category: _selectedCategory!,
-        unit: unit,
-        price: _priceController.text.trim(),
-        taxPercent: _taxController.text.trim(),
-        hsnSac: _hsnSacController.text.trim(),
-        updatedAt: now,
-      );
+            name: _nameController.text.trim(),
+            partNo: _partNoController.text.trim(),
+            category: _selectedCategory!,
+            unit: unit,
+            price: _priceController.text.trim(),
+            taxPercent: _taxController.text.trim(),
+            hsnSac: _hsnSacController.text.trim(),
+            updatedAt: now,
+          );
 
       if (_existing != null) {
         await notifier.update(base);
@@ -212,131 +216,141 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
             ),
         ],
       ),
-      body: Form(
-        key: _formKey,
-        autovalidateMode: AutovalidateMode.onUserInteraction,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            if (isEditing) ...[
-              Center(
-                child: Hero(
-                  tag: 'product-${_existing!.id}',
-                  child: CircleAvatar(
-                    radius: 28,
-                    backgroundColor:
-                        Theme.of(context).colorScheme.secondaryContainer,
-                    foregroundColor:
-                        Theme.of(context).colorScheme.onSecondaryContainer,
-                    child: const Icon(Icons.inventory_2_outlined),
-                  ),
-                ),
-              ),
-              if (_existing!.productCode.isNotEmpty) ...[
-                const SizedBox(height: 8),
+      body: ResponsiveContainer(
+        child: Form(
+          key: _formKey,
+          autovalidateMode: AutovalidateMode.onUserInteraction,
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              if (isEditing) ...[
                 Center(
-                  child: Text(
-                    _existing!.productCode,
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodyMedium
-                        ?.copyWith(color: Theme.of(context).colorScheme.primary),
+                  child: Hero(
+                    tag: 'product-${_existing!.id}',
+                    child: CircleAvatar(
+                      radius: 28,
+                      backgroundColor: Theme.of(
+                        context,
+                      ).colorScheme.secondaryContainer,
+                      foregroundColor: Theme.of(
+                        context,
+                      ).colorScheme.onSecondaryContainer,
+                      child: const Icon(Icons.inventory_2_outlined),
+                    ),
                   ),
                 ),
+                if (_existing!.productCode.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Center(
+                    child: Text(
+                      _existing!.productCode,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
               ],
-              const SizedBox(height: 16),
-            ],
-            TextFormField(
-              controller: _nameController,
-              decoration: const InputDecoration(labelText: 'Name *'),
-              validator: _validateName,
-              textInputAction: TextInputAction.next,
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _partNoController,
-              decoration: const InputDecoration(
-                labelText: 'Part No',
-                helperText: 'Optional — does not have to be unique',
-              ),
-              textInputAction: TextInputAction.next,
-            ),
-            const SizedBox(height: 16),
-            DropdownButtonFormField<String>(
-              initialValue: _selectedCategory,
-              decoration: const InputDecoration(
-                labelText: 'Category *',
-                helperText: 'Sales = goods sold outright · '
-                    'Labour = job-work on customer material',
-              ),
-              items: Product.categories
-                  .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                  .toList(),
-              onChanged: (v) => setState(() => _selectedCategory = v),
-              validator: (v) => v == null ? 'Category is required' : null,
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _hsnSacController,
-              decoration: InputDecoration(
-                labelText: Product.codeLabelFor(_selectedCategory),
-              ),
-              textInputAction: TextInputAction.next,
-            ),
-            const SizedBox(height: 16),
-            DropdownButtonFormField<String>(
-              initialValue: _selectedUnit,
-              decoration: const InputDecoration(labelText: 'Unit'),
-              items: Product.units
-                  .map((u) => DropdownMenuItem(value: u, child: Text(u)))
-                  .toList(),
-              onChanged: (v) => setState(() => _selectedUnit = v),
-            ),
-            if (_selectedUnit == 'Other') ...[
-              const SizedBox(height: 12),
               TextFormField(
-                controller: _otherUnitController,
-                decoration: const InputDecoration(labelText: 'Specify unit *'),
-                validator: _validateOtherUnit,
+                controller: _nameController,
+                decoration: const InputDecoration(labelText: 'Name *'),
+                validator: _validateName,
                 textInputAction: TextInputAction.next,
                 onChanged: (_) => setState(() {}),
               ),
-            ],
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _priceController,
-              decoration: const InputDecoration(
-                labelText: 'Price *',
-                helperText: 'Labour lines are often ₹0 — that is allowed',
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _partNoController,
+                decoration: const InputDecoration(
+                  labelText: 'Part No',
+                  helperText: 'Optional — does not have to be unique',
+                ),
+                textInputAction: TextInputAction.next,
               ),
-              validator: _validatePrice,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              textInputAction: TextInputAction.next,
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _taxController,
-              decoration: const InputDecoration(labelText: 'Tax %'),
-              validator: _validateTax,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              textInputAction: TextInputAction.done,
-              onFieldSubmitted: (_) => _submit(),
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 24),
-            FilledButton(
-              onPressed: _isValid && !_isSaving ? _submit : null,
-              child: _isSaving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : Text(isEditing ? 'Save changes' : 'Create product'),
-            ),
-          ],
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                initialValue: _selectedCategory,
+                decoration: const InputDecoration(
+                  labelText: 'Category *',
+                  helperText:
+                      'Sales = goods sold outright · '
+                      'Labour = job-work on customer material',
+                ),
+                items: Product.categories
+                    .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                    .toList(),
+                onChanged: (v) => setState(() => _selectedCategory = v),
+                validator: (v) => v == null ? 'Category is required' : null,
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _hsnSacController,
+                decoration: InputDecoration(
+                  labelText: Product.codeLabelFor(_selectedCategory),
+                ),
+                textInputAction: TextInputAction.next,
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                initialValue: _selectedUnit,
+                decoration: const InputDecoration(labelText: 'Unit'),
+                items: Product.units
+                    .map((u) => DropdownMenuItem(value: u, child: Text(u)))
+                    .toList(),
+                onChanged: (v) => setState(() => _selectedUnit = v),
+              ),
+              if (_selectedUnit == 'Other') ...[
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _otherUnitController,
+                  decoration: const InputDecoration(
+                    labelText: 'Specify unit *',
+                  ),
+                  validator: _validateOtherUnit,
+                  textInputAction: TextInputAction.next,
+                  onChanged: (_) => setState(() {}),
+                ),
+              ],
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _priceController,
+                decoration: const InputDecoration(
+                  labelText: 'Price *',
+                  helperText: 'Labour lines are often ₹0 — that is allowed',
+                ),
+                validator: _validatePrice,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                textInputAction: TextInputAction.next,
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _taxController,
+                decoration: const InputDecoration(labelText: 'Tax %'),
+                validator: _validateTax,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                textInputAction: TextInputAction.done,
+                onFieldSubmitted: (_) => _submit(),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 24),
+              FilledButton(
+                onPressed: _isValid && !_isSaving ? _submit : null,
+                child: _isSaving
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(isEditing ? 'Save changes' : 'Create product'),
+              ),
+            ],
+          ),
         ),
       ),
     );

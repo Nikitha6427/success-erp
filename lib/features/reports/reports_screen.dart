@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../core/services/csv_export.dart';
+import '../../core/widgets/responsive_container.dart';
 import '../../core/widgets/app_drawer.dart';
 import '../../core/widgets/empty_state.dart';
 import '../customers/customers_notifier.dart';
@@ -57,8 +58,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
       await ref.read(productsNotifierProvider.notifier).load();
       await ref.read(poNotifierProvider.notifier).load();
       await ref.read(invoiceListProvider.notifier).load();
-      final items =
-          await ref.read(invoiceItemRepositoryProvider).loadAll();
+      final items = await ref.read(invoiceItemRepositoryProvider).loadAll();
       if (mounted) ref.read(invoiceItemsCacheProvider.notifier).state = items;
     });
   }
@@ -81,13 +81,15 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
           ),
         ),
         drawer: const AppDrawer(currentPath: '/reports'),
-        body: const TabBarView(
-          children: [
-            _PendingDeliveriesReport(),
-            _SalesByCustomerReport(),
-            _SalesByProductReport(),
-            _OutstandingInvoicesReport(),
-          ],
+        body: ResponsiveContainer(
+          child: const TabBarView(
+            children: [
+              _PendingDeliveriesReport(),
+              _SalesByCustomerReport(),
+              _SalesByProductReport(),
+              _OutstandingInvoicesReport(),
+            ],
+          ),
         ),
       ),
     );
@@ -95,8 +97,9 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
 }
 
 /// InvoiceItems loaded once for the Sales-by-Product report.
-final invoiceItemsCacheProvider =
-    StateProvider<List<InvoiceItem>>((ref) => const []);
+final invoiceItemsCacheProvider = StateProvider<List<InvoiceItem>>(
+  (ref) => const [],
+);
 
 // ─── Shared scaffolding ──────────────────────────────────────────────────────
 
@@ -196,10 +199,9 @@ Widget _amountList(
           title: Text(entry.key),
           trailing: Text(
             money.format(entry.value),
-            style: Theme.of(context)
-                .textTheme
-                .titleSmall
-                ?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
           ),
         ),
       );
@@ -229,10 +231,12 @@ class _PendingDeliveriesReportState
     final pending = ref
         .watch(poNotifierProvider)
         .orders
-        .where((po) =>
-            (po.status == PurchaseOrder.statusPending ||
-                po.status == PurchaseOrder.statusPartiallyDelivered) &&
-            _range.contains(po.orderDate))
+        .where(
+          (po) =>
+              (po.status == PurchaseOrder.statusPending ||
+                  po.status == PurchaseOrder.statusPartiallyDelivered) &&
+              _range.contains(po.orderDate),
+        )
         .toList();
 
     return _ReportShell(
@@ -242,12 +246,14 @@ class _PendingDeliveriesReportState
         fileName: 'pending_deliveries',
         headers: ['PO Number', 'Customer', 'Status', 'Order Date'],
         rows: pending
-            .map((po) => [
-                  po.poNumber,
-                  customerById[po.customerId] ?? 'Unknown',
-                  po.status,
-                  po.orderDate,
-                ])
+            .map(
+              (po) => [
+                po.poNumber,
+                customerById[po.customerId] ?? 'Unknown',
+                po.status,
+                po.orderDate,
+              ],
+            )
             .toList(),
       ),
       child: pending.isEmpty
@@ -260,8 +266,10 @@ class _PendingDeliveriesReportState
               itemBuilder: (context, index) {
                 final po = pending[index];
                 return Card(
-                  margin:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  margin: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 4,
+                  ),
                   child: ListTile(
                     title: Text(
                       '${po.poNumber} — '
@@ -316,8 +324,12 @@ class _SalesByCustomerReportState
         headers: ['Customer', 'Total Sales'],
         rows: sorted.map((e) => [e.key, e.value.toStringAsFixed(2)]).toList(),
       ),
-      child: _amountList(context, sorted, 'No sales data in this range',
-          Icons.people_outline),
+      child: _amountList(
+        context,
+        sorted,
+        'No sales data in this range',
+        Icons.people_outline,
+      ),
     );
   }
 }
@@ -351,7 +363,8 @@ class _SalesByProductReportState extends ConsumerState<_SalesByProductReport> {
     for (final item in items) {
       if (!invoiceIdsInRange.contains(item.invoiceId)) continue;
       final name = item.productId.isEmpty
-          ? item.description // flat charge
+          ? item
+                .description // flat charge
           : (productById[item.productId] ?? 'Unknown');
       totals[name] = (totals[name] ?? 0) + item.amt;
     }
@@ -366,8 +379,12 @@ class _SalesByProductReportState extends ConsumerState<_SalesByProductReport> {
         headers: ['Product', 'Total Sales'],
         rows: sorted.map((e) => [e.key, e.value.toStringAsFixed(2)]).toList(),
       ),
-      child: _amountList(context, sorted, 'No sales data in this range',
-          Icons.inventory_2_outlined),
+      child: _amountList(
+        context,
+        sorted,
+        'No sales data in this range',
+        Icons.inventory_2_outlined,
+      ),
     );
   }
 }
@@ -397,8 +414,10 @@ class _OutstandingInvoicesReportState
         .invoices
         .where((inv) => !inv.isPaid && _range.contains(inv.invoiceDate))
         .toList();
-    final outstandingTotal =
-        unpaid.fold<double>(0, (sum, inv) => sum + inv.total);
+    final outstandingTotal = unpaid.fold<double>(
+      0,
+      (sum, inv) => sum + inv.total,
+    );
 
     return _ReportShell(
       range: _range,
@@ -407,13 +426,15 @@ class _OutstandingInvoicesReportState
         fileName: 'outstanding_invoices',
         headers: ['Invoice', 'PO Number', 'Amount', 'Status', 'Invoice Date'],
         rows: unpaid
-            .map((inv) => [
-                  inv.invoiceNumber,
-                  poById[inv.poId]?.poNumber ?? '',
-                  inv.totalAmount,
-                  inv.status,
-                  inv.invoiceDate,
-                ])
+            .map(
+              (inv) => [
+                inv.invoiceNumber,
+                poById[inv.poId]?.poNumber ?? '',
+                inv.totalAmount,
+                inv.status,
+                inv.invoiceDate,
+              ],
+            )
             .toList(),
       ),
       child: unpaid.isEmpty
@@ -425,16 +446,16 @@ class _OutstandingInvoicesReportState
               children: [
                 Padding(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 8),
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text('Total outstanding'),
                       Text(
                         money.format(outstandingTotal),
-                        style: Theme.of(context)
-                            .textTheme
-                            .titleMedium
+                        style: Theme.of(context).textTheme.titleMedium
                             ?.copyWith(fontWeight: FontWeight.bold),
                       ),
                     ],
@@ -447,7 +468,9 @@ class _OutstandingInvoicesReportState
                       final inv = unpaid[index];
                       return Card(
                         margin: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 4),
+                          horizontal: 16,
+                          vertical: 4,
+                        ),
                         child: ListTile(
                           title: Text(
                             '${inv.invoiceNumber} — '
@@ -456,9 +479,7 @@ class _OutstandingInvoicesReportState
                           subtitle: Text('Status: ${inv.status}'),
                           trailing: Text(
                             money.format(inv.total),
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleSmall
+                            style: Theme.of(context).textTheme.titleSmall
                                 ?.copyWith(fontWeight: FontWeight.bold),
                           ),
                         ),

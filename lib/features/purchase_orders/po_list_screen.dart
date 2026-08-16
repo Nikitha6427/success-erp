@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import '../../core/widgets/responsive_container.dart';
 import '../../core/widgets/app_drawer.dart';
 import '../../core/widgets/empty_state.dart';
 import '../../core/widgets/loading_list_skeleton.dart';
@@ -50,32 +51,32 @@ class _PoListScreenState extends ConsumerState<PoListScreen> {
   // ── Selection ─────────────────────────────────────────────────────────────
 
   void _exitSelection() => setState(() {
-        _selecting = false;
-        _selected.clear();
-      });
+    _selecting = false;
+    _selected.clear();
+  });
 
   void _startSelection(String id) => setState(() {
-        _selecting = true;
-        _selected.add(id);
-      });
+    _selecting = true;
+    _selected.add(id);
+  });
 
   void _toggle(String id) => setState(() {
-        if (!_selected.remove(id)) _selected.add(id);
-        // Unselecting the last row leaves selection mode, matching the
-        // platform convention.
-        if (_selected.isEmpty) _selecting = false;
-      });
+    if (!_selected.remove(id)) _selected.add(id);
+    // Unselecting the last row leaves selection mode, matching the
+    // platform convention.
+    if (_selected.isEmpty) _selecting = false;
+  });
 
   void _toggleSelectAll(List<PurchaseOrder> visible) => setState(() {
-        if (_selected.length == visible.length) {
-          _selected.clear();
-          _selecting = false;
-        } else {
-          _selected
-            ..clear()
-            ..addAll(visible.map((po) => po.id));
-        }
-      });
+    if (_selected.length == visible.length) {
+      _selected.clear();
+      _selecting = false;
+    } else {
+      _selected
+        ..clear()
+        ..addAll(visible.map((po) => po.id));
+    }
+  });
 
   Future<void> _deleteSelected() async {
     if (_selected.isEmpty || _isDeleting) return;
@@ -93,7 +94,7 @@ class _PoListScreenState extends ConsumerState<PoListScreen> {
           ids.length == 1
               ? 'This order is already invoiced and cannot be deleted.'
               : 'All ${ids.length} selected orders are already invoiced and '
-                  'cannot be deleted.',
+                    'cannot be deleted.',
           isError: true,
         );
         return;
@@ -154,52 +155,56 @@ class _PoListScreenState extends ConsumerState<PoListScreen> {
                 totalCount: filtered.length,
                 onClose: _exitSelection,
                 onToggleSelectAll: () => _toggleSelectAll(filtered),
-                onDelete:
-                    _selected.isEmpty || _isDeleting ? null : _deleteSelected,
+                onDelete: _selected.isEmpty || _isDeleting
+                    ? null
+                    : _deleteSelected,
               )
             : AppBar(title: const Text('Purchase Orders')),
-        drawer:
-            _selecting ? null : const AppDrawer(currentPath: '/purchase-orders'),
-        body: Column(
-          children: [
-            if (_isDeleting) const LinearProgressIndicator(),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: TextField(
-                controller: _searchController,
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search),
-                  hintText: 'Search by PO number or customer',
+        drawer: _selecting
+            ? null
+            : const AppDrawer(currentPath: '/purchase-orders'),
+        body: ResponsiveContainer(
+          child: Column(
+            children: [
+              if (_isDeleting) const LinearProgressIndicator(),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: TextField(
+                  controller: _searchController,
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.search),
+                    hintText: 'Search by PO number or customer',
+                  ),
+                  onChanged: (v) => setState(() => _query = v),
                 ),
-                onChanged: (v) => setState(() => _query = v),
               ),
-            ),
-            SizedBox(
-              height: 40,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemCount: _statuses.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 8),
-                itemBuilder: (context, i) {
-                  final s = _statuses[i];
-                  return FilterChip(
-                    label: Text(s),
-                    selected: _statusFilter == s,
-                    onSelected: (_) => setState(() => _statusFilter = s),
-                    showCheckmark: false,
-                  );
-                },
+              SizedBox(
+                height: 40,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  itemCount: _statuses.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 8),
+                  itemBuilder: (context, i) {
+                    final s = _statuses[i];
+                    return FilterChip(
+                      label: Text(s),
+                      selected: _statusFilter == s,
+                      onSelected: (_) => setState(() => _statusFilter = s),
+                      showCheckmark: false,
+                    );
+                  },
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 300),
-                child: _buildBody(state, filtered, customerById),
+              const SizedBox(height: 8),
+              Expanded(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 300),
+                  child: _buildBody(state, filtered, customerById),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
         floatingActionButton: _selecting
             ? null

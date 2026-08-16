@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../core/services/address_format.dart';
+import '../../core/widgets/responsive_container.dart';
 import '../../core/widgets/empty_state.dart';
 import '../../core/widgets/status_pill.dart';
 import '../../core/widgets/snack_bar_helper.dart';
@@ -85,13 +86,15 @@ class _CustomerDetailScreenState extends ConsumerState<CustomerDetailScreen> {
         .where((c) => c.id == widget.id)
         .firstOrNull;
     final allPos = ref.watch(poNotifierProvider).orders;
-    final customerPos =
-        allPos.where((po) => po.customerId == widget.id).toList();
+    final customerPos = allPos
+        .where((po) => po.customerId == widget.id)
+        .toList();
     final allInvoices = ref.watch(invoiceListProvider).invoices;
 
     final poIds = customerPos.map((po) => po.id).toSet();
-    final customerInvoices =
-        allInvoices.where((inv) => poIds.contains(inv.poId)).toList();
+    final customerInvoices = allInvoices
+        .where((inv) => poIds.contains(inv.poId))
+        .toList();
 
     double totalInvoiced = 0;
     double totalOutstanding = 0;
@@ -120,106 +123,122 @@ class _CustomerDetailScreenState extends ConsumerState<CustomerDetailScreen> {
           ],
         ],
       ),
-      body: customer == null
-          ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Hero(
-                    tag: 'customer-${customer.id}',
-                    child: CircleAvatar(
-                      radius: 32,
-                      backgroundColor: theme.colorScheme.primaryContainer,
-                      foregroundColor: theme.colorScheme.onPrimaryContainer,
-                      child: Text(
-                        customer.name.isNotEmpty
-                            ? customer.name[0].toUpperCase()
-                            : '?',
-                        style: const TextStyle(fontSize: 28),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(customer.name, style: theme.textTheme.headlineSmall),
-                  if (customer.customerCode.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      customer.customerCode,
-                      style: theme.textTheme.bodyMedium
-                          ?.copyWith(color: theme.colorScheme.primary),
-                    ),
-                  ],
-                  const SizedBox(height: 16),
-                  _field(theme, Icons.phone, 'Phone', customer.phone),
-                  _field(theme, Icons.email, 'Email', customer.email),
-                  _field(
-                    theme,
-                    Icons.location_on,
-                    'Address',
-                    customer.addressLines.join('\n'),
-                  ),
-                  _field(theme, Icons.receipt_long, 'GST',
-                      AddressFormat.orNoneBlank(customer.gstNumber)),
-                  _field(theme, Icons.receipt_long, 'TIN',
-                      AddressFormat.orNoneBlank(customer.tinNumber)),
-                  _field(theme, Icons.receipt_long, 'CST',
-                      AddressFormat.orNoneBlank(customer.cstNumber)),
-                  const SizedBox(height: 24),
-
-                  // Two-number outstanding summary (AGENTS.md §5).
-                  Card(
-                    color: theme.colorScheme.surfaceContainerHighest,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: _stat(
-                              theme,
-                              'Total Invoiced',
-                              money.format(totalInvoiced),
-                            ),
-                          ),
-                          Expanded(
-                            child: _stat(
-                              theme,
-                              'Outstanding',
-                              money.format(totalOutstanding),
-                              color: totalOutstanding > 0
-                                  ? theme.colorScheme.error
-                                  : null,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-
-                  Text('Order history', style: theme.textTheme.titleMedium),
-                  const SizedBox(height: 8),
-                  if (customerPos.isEmpty)
-                    const EmptyState(
-                      icon: Icons.receipt_long_outlined,
-                      message: 'No orders yet',
-                    )
-                  else
-                    ...customerPos.map(
-                      (po) => Card(
-                        margin: const EdgeInsets.only(bottom: 8),
-                        child: ListTile(
-                          title: Text(po.poNumber),
-                          subtitle: Text(_formatDate(po.orderDate)),
-                          trailing: StatusPill(status: po.status),
-                          onTap: () => context.push('/purchase-orders/${po.id}'),
+      body: ResponsiveContainer(
+        child: customer == null
+            ? const Center(child: CircularProgressIndicator())
+            : SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Hero(
+                      tag: 'customer-${customer.id}',
+                      child: CircleAvatar(
+                        radius: 32,
+                        backgroundColor: theme.colorScheme.primaryContainer,
+                        foregroundColor: theme.colorScheme.onPrimaryContainer,
+                        child: Text(
+                          customer.name.isNotEmpty
+                              ? customer.name[0].toUpperCase()
+                              : '?',
+                          style: const TextStyle(fontSize: 28),
                         ),
                       ),
                     ),
-                ],
+                    const SizedBox(height: 16),
+                    Text(customer.name, style: theme.textTheme.headlineSmall),
+                    if (customer.customerCode.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        customer.customerCode,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    _field(theme, Icons.phone, 'Phone', customer.phone),
+                    _field(theme, Icons.email, 'Email', customer.email),
+                    _field(
+                      theme,
+                      Icons.location_on,
+                      'Address',
+                      customer.addressLines.join('\n'),
+                    ),
+                    _field(
+                      theme,
+                      Icons.receipt_long,
+                      'GST',
+                      AddressFormat.orNoneBlank(customer.gstNumber),
+                    ),
+                    _field(
+                      theme,
+                      Icons.receipt_long,
+                      'TIN',
+                      AddressFormat.orNoneBlank(customer.tinNumber),
+                    ),
+                    _field(
+                      theme,
+                      Icons.receipt_long,
+                      'CST',
+                      AddressFormat.orNoneBlank(customer.cstNumber),
+                    ),
+                    const SizedBox(height: 24),
+
+                    // Two-number outstanding summary (AGENTS.md §5).
+                    Card(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: _stat(
+                                theme,
+                                'Total Invoiced',
+                                money.format(totalInvoiced),
+                              ),
+                            ),
+                            Expanded(
+                              child: _stat(
+                                theme,
+                                'Outstanding',
+                                money.format(totalOutstanding),
+                                color: totalOutstanding > 0
+                                    ? theme.colorScheme.error
+                                    : null,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+
+                    Text('Order history', style: theme.textTheme.titleMedium),
+                    const SizedBox(height: 8),
+                    if (customerPos.isEmpty)
+                      const EmptyState(
+                        icon: Icons.receipt_long_outlined,
+                        message: 'No orders yet',
+                      )
+                    else
+                      ...customerPos.map(
+                        (po) => Card(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          child: ListTile(
+                            title: Text(po.poNumber),
+                            subtitle: Text(_formatDate(po.orderDate)),
+                            trailing: StatusPill(status: po.status),
+                            onTap: () =>
+                                context.push('/purchase-orders/${po.id}'),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ),
-            ),
+      ),
     );
   }
 
@@ -229,24 +248,22 @@ class _CustomerDetailScreenState extends ConsumerState<CustomerDetailScreen> {
         children: [
           Text(
             label,
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.outline),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
           ),
           const SizedBox(height: 4),
           Text(
             value,
-            style: theme.textTheme.titleMedium
-                ?.copyWith(fontWeight: FontWeight.bold, color: color),
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
           ),
         ],
       );
 
-  Widget _field(
-    ThemeData theme,
-    IconData icon,
-    String label,
-    String value,
-  ) {
+  Widget _field(ThemeData theme, IconData icon, String label, String value) {
     if (value.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -261,8 +278,9 @@ class _CustomerDetailScreenState extends ConsumerState<CustomerDetailScreen> {
               children: [
                 Text(
                   label,
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.outline),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
                 ),
                 Text(value, style: theme.textTheme.bodyMedium),
               ],

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
+import '../../core/widgets/responsive_container.dart';
 import '../../core/widgets/snack_bar_helper.dart';
 import '../customers/customers_notifier.dart';
 import '../products/models/product.dart';
@@ -136,17 +137,17 @@ class _PoCreateScreenState extends ConsumerState<PoCreateScreen> {
   }
 
   void _removeItem(int index) => setState(() {
-        _items.removeAt(index);
-        // Any removal invalidates a pending edit's index, so cancel the edit
-        // rather than let "Update item" overwrite the wrong row.
-        if (_editingIndex != null) {
-          _editingIndex = null;
-          _newProductId = null;
-          _newQtyController.clear();
-          _newRateController.clear();
-          _newRemarksController.clear();
-        }
-      });
+    _items.removeAt(index);
+    // Any removal invalidates a pending edit's index, so cancel the edit
+    // rather than let "Update item" overwrite the wrong row.
+    if (_editingIndex != null) {
+      _editingIndex = null;
+      _newProductId = null;
+      _newQtyController.clear();
+      _newRateController.clear();
+      _newRemarksController.clear();
+    }
+  });
 
   void _editItem(int index) {
     final item = _items[index];
@@ -263,8 +264,9 @@ class _PoCreateScreenState extends ConsumerState<PoCreateScreen> {
                     Text('Order total', style: theme.textTheme.titleMedium),
                     Text(
                       _total.toStringAsFixed(2),
-                      style: theme.textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.bold),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ],
                 ),
@@ -273,8 +275,7 @@ class _PoCreateScreenState extends ConsumerState<PoCreateScreen> {
                   children: [
                     Expanded(
                       child: OutlinedButton(
-                        onPressed: () =>
-                            Navigator.of(sheetContext).pop(false),
+                        onPressed: () => Navigator.of(sheetContext).pop(false),
                         child: const Text('Back to edit'),
                       ),
                     ),
@@ -318,34 +319,38 @@ class _PoCreateScreenState extends ConsumerState<PoCreateScreen> {
         orderDate: _orderDate,
       );
 
-      await poRepo.save(PurchaseOrder(
-        id: poId,
-        poNumber: poNumber,
-        customerId: _customerId!,
-        orderDate: _orderDate.toIso8601String(),
-        clientPoNumber: _clientPoNumberController.text.trim(),
-        clientPoDate: _clientPoDate?.toIso8601String() ?? '',
-        clientDeliveryNoteNumber: _clientDnNumberController.text.trim(),
-        clientDeliveryNoteDate: _clientDnDate?.toIso8601String() ?? '',
-        status: PurchaseOrder.statusPending,
-        createdAt: now,
-        updatedAt: now,
-      ));
+      await poRepo.save(
+        PurchaseOrder(
+          id: poId,
+          poNumber: poNumber,
+          customerId: _customerId!,
+          orderDate: _orderDate.toIso8601String(),
+          clientPoNumber: _clientPoNumberController.text.trim(),
+          clientPoDate: _clientPoDate?.toIso8601String() ?? '',
+          clientDeliveryNoteNumber: _clientDnNumberController.text.trim(),
+          clientDeliveryNoteDate: _clientDnDate?.toIso8601String() ?? '',
+          status: PurchaseOrder.statusPending,
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
 
       for (final item in _items) {
         final qty = item.qty;
-        await itemRepo.save(PurchaseOrderItem(
-          id: const Uuid().v4(),
-          poId: poId,
-          productId: item.productId,
-          quantity: _trimNum(qty),
-          // Rate snapshotted here; never re-linked to the product master.
-          rate: _trimNum(item.rt),
-          deliveredQty: '0',
-          pendingQty: _trimNum(qty),
-          remarks: item.remarks,
-          updatedAt: now,
-        ));
+        await itemRepo.save(
+          PurchaseOrderItem(
+            id: const Uuid().v4(),
+            poId: poId,
+            productId: item.productId,
+            quantity: _trimNum(qty),
+            // Rate snapshotted here; never re-linked to the product master.
+            rate: _trimNum(item.rt),
+            deliveredQty: '0',
+            pendingQty: _trimNum(qty),
+            remarks: item.remarks,
+            updatedAt: now,
+          ),
+        );
       }
 
       await ref.read(poNotifierProvider.notifier).load();
@@ -390,275 +395,298 @@ class _PoCreateScreenState extends ConsumerState<PoCreateScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('New Purchase Order')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        children: [
-          DropdownButtonFormField<String>(
-            initialValue: _customerId,
-            decoration: const InputDecoration(labelText: 'Customer *'),
-            isExpanded: true,
-            items: customers
-                .map((c) => DropdownMenuItem(
+      body: ResponsiveContainer(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          children: [
+            DropdownButtonFormField<String>(
+              initialValue: _customerId,
+              decoration: const InputDecoration(labelText: 'Customer *'),
+              isExpanded: true,
+              items: customers
+                  .map(
+                    (c) => DropdownMenuItem(
                       value: c.id,
                       child: Text(c.name, overflow: TextOverflow.ellipsis),
-                    ))
-                .toList(),
-            onChanged: (v) => setState(() => _customerId = v),
-          ),
-          if (_customerId == null)
-            Padding(
-              padding: const EdgeInsets.only(top: 6, left: 12),
-              child: Text(
-                'Select a customer to continue',
-                style: TextStyle(
-                    color: theme.colorScheme.error, fontSize: 12),
-              ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (v) => setState(() => _customerId = v),
             ),
-          const SizedBox(height: 16),
-          _dateField(
-            label: 'Order date *',
-            value: _orderDate,
-            onTap: () => _pickDate(
-              initial: _orderDate,
-              onPicked: (d) => setState(() => _orderDate = d),
-            ),
-          ),
-
-          const SizedBox(height: 24),
-          Text("Client's references", style: theme.textTheme.titleSmall),
-          Text(
-            "The client's own PO and delivery-challan numbers, if they gave "
-            'you any. Optional.',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.outline),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _clientPoNumberController,
-            decoration: const InputDecoration(labelText: "Client's PO number"),
-            textInputAction: TextInputAction.next,
-          ),
-          const SizedBox(height: 12),
-          _dateField(
-            label: "Client's PO date",
-            value: _clientPoDate,
-            onTap: () => _pickDate(
-              initial: _clientPoDate,
-              onPicked: (d) => setState(() => _clientPoDate = d),
-            ),
-            onClear: _clientPoDate == null
-                ? null
-                : () => setState(() => _clientPoDate = null),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _clientDnNumberController,
-            decoration: const InputDecoration(
-              labelText: "Client's delivery challan number",
-              helperText: 'For material they sent you to process',
-            ),
-            textInputAction: TextInputAction.next,
-          ),
-          const SizedBox(height: 12),
-          _dateField(
-            label: "Client's delivery challan date",
-            value: _clientDnDate,
-            onTap: () => _pickDate(
-              initial: _clientDnDate,
-              onPicked: (d) => setState(() => _clientDnDate = d),
-            ),
-            onClear: _clientDnDate == null
-                ? null
-                : () => setState(() => _clientDnDate = null),
-          ),
-
-          const SizedBox(height: 24),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('Line items (${_items.length})',
-                  style: theme.textTheme.titleMedium),
-              TextButton(
-                onPressed: () =>
-                    setState(() => _formExpanded = !_formExpanded),
-                child: Text(_formExpanded ? 'Hide form' : 'Add item'),
-              ),
-            ],
-          ),
-          if (_items.isEmpty && !_formExpanded)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 24),
-              child: Center(
+            if (_customerId == null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6, left: 12),
                 child: Text(
-                  'No items yet. Tap "Add item" to start.',
-                  style: TextStyle(color: theme.colorScheme.outline),
+                  'Select a customer to continue',
+                  style: TextStyle(
+                    color: theme.colorScheme.error,
+                    fontSize: 12,
+                  ),
                 ),
+              ),
+            const SizedBox(height: 16),
+            _dateField(
+              label: 'Order date *',
+              value: _orderDate,
+              onTap: () => _pickDate(
+                initial: _orderDate,
+                onPicked: (d) => setState(() => _orderDate = d),
               ),
             ),
-          ...List.generate(_items.length, (i) {
-            final item = _items[i];
-            final product = productById[item.productId];
-            return Card(
-              margin: const EdgeInsets.only(bottom: 8),
-              child: ListTile(
-                title: Text(product?.name ?? 'Unknown'),
-                subtitle: Text(
-                  'Qty: ${item.quantity} ${product?.unit ?? ''}  •  '
-                  'Rate: ${item.rate}  •  '
-                  'Total: ${item.lineTotal.toStringAsFixed(2)}'
-                  '${item.remarks.isEmpty ? '' : '\n${item.remarks}'}',
+
+            const SizedBox(height: 24),
+            Text("Client's references", style: theme.textTheme.titleSmall),
+            Text(
+              "The client's own PO and delivery-challan numbers, if they gave "
+              'you any. Optional.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _clientPoNumberController,
+              decoration: const InputDecoration(
+                labelText: "Client's PO number",
+              ),
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: 12),
+            _dateField(
+              label: "Client's PO date",
+              value: _clientPoDate,
+              onTap: () => _pickDate(
+                initial: _clientPoDate,
+                onPicked: (d) => setState(() => _clientPoDate = d),
+              ),
+              onClear: _clientPoDate == null
+                  ? null
+                  : () => setState(() => _clientPoDate = null),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _clientDnNumberController,
+              decoration: const InputDecoration(
+                labelText: "Client's delivery challan number",
+                helperText: 'For material they sent you to process',
+              ),
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: 12),
+            _dateField(
+              label: "Client's delivery challan date",
+              value: _clientDnDate,
+              onTap: () => _pickDate(
+                initial: _clientDnDate,
+                onPicked: (d) => setState(() => _clientDnDate = d),
+              ),
+              onClear: _clientDnDate == null
+                  ? null
+                  : () => setState(() => _clientDnDate = null),
+            ),
+
+            const SizedBox(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Line items (${_items.length})',
+                  style: theme.textTheme.titleMedium,
                 ),
-                isThreeLine: item.remarks.isNotEmpty,
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.edit, size: 20),
-                      tooltip: 'Edit item',
-                      onPressed: () => _editItem(i),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline, size: 20),
-                      tooltip: 'Remove item',
-                      onPressed: () => _removeItem(i),
-                    ),
-                  ],
+                TextButton(
+                  onPressed: () =>
+                      setState(() => _formExpanded = !_formExpanded),
+                  child: Text(_formExpanded ? 'Hide form' : 'Add item'),
+                ),
+              ],
+            ),
+            if (_items.isEmpty && !_formExpanded)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: Text(
+                    'No items yet. Tap "Add item" to start.',
+                    style: TextStyle(color: theme.colorScheme.outline),
+                  ),
                 ),
               ),
-            );
-          }),
+            ...List.generate(_items.length, (i) {
+              final item = _items[i];
+              final product = productById[item.productId];
+              return Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: ListTile(
+                  title: Text(product?.name ?? 'Unknown'),
+                  subtitle: Text(
+                    'Qty: ${item.quantity} ${product?.unit ?? ''}  •  '
+                    'Rate: ${item.rate}  •  '
+                    'Total: ${item.lineTotal.toStringAsFixed(2)}'
+                    '${item.remarks.isEmpty ? '' : '\n${item.remarks}'}',
+                  ),
+                  isThreeLine: item.remarks.isNotEmpty,
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.edit, size: 20),
+                        tooltip: 'Edit item',
+                        onPressed: () => _editItem(i),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline, size: 20),
+                        tooltip: 'Remove item',
+                        onPressed: () => _removeItem(i),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
 
-          if (_formExpanded) ...[
-            const SizedBox(height: 8),
-            Card(
-              color: theme.colorScheme.surfaceContainerHighest,
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      _editingIndex != null
-                          ? 'Edit item ${_editingIndex! + 1}'
-                          : (_items.isEmpty
-                              ? 'Add first item'
-                              : 'Add another item'),
-                      style: theme.textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      initialValue: _newProductId,
-                      decoration: const InputDecoration(labelText: 'Product *'),
-                      focusNode: _productFocusNode,
-                      isExpanded: true,
-                      items: products
-                          .map((p) => DropdownMenuItem(
+            if (_formExpanded) ...[
+              const SizedBox(height: 8),
+              Card(
+                color: theme.colorScheme.surfaceContainerHighest,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        _editingIndex != null
+                            ? 'Edit item ${_editingIndex! + 1}'
+                            : (_items.isEmpty
+                                  ? 'Add first item'
+                                  : 'Add another item'),
+                        style: theme.textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue: _newProductId,
+                        decoration: const InputDecoration(
+                          labelText: 'Product *',
+                        ),
+                        focusNode: _productFocusNode,
+                        isExpanded: true,
+                        items: products
+                            .map(
+                              (p) => DropdownMenuItem(
                                 value: p.id,
                                 child: Text(
                                   '${p.name}${p.partNo.isEmpty ? '' : ' (${p.partNo})'}',
                                   overflow: TextOverflow.ellipsis,
                                 ),
-                              ))
-                          .toList(),
-                      onChanged: (productId) {
-                        setState(() => _newProductId = productId);
-                        if (productId == null) return;
-                        final product = productById[productId];
-                        if (product != null) {
-                          // Pre-fill from the product master, still editable.
-                          _newRateController.text = product.price;
-                        }
-                        _qtyFocusNode.requestFocus();
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _newQtyController,
-                            decoration: InputDecoration(
-                              labelText: 'Quantity *',
-                              errorText: _qtyError,
-                            ),
-                            focusNode: _qtyFocusNode,
-                            keyboardType:
-                                const TextInputType.numberWithOptions(
-                                    decimal: true),
-                            textInputAction: TextInputAction.next,
-                            onChanged: (_) => setState(() {}),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: TextField(
-                            controller: _newRateController,
-                            decoration: InputDecoration(
-                              labelText: 'Rate *',
-                              errorText: _rateError,
-                            ),
-                            keyboardType:
-                                const TextInputType.numberWithOptions(
-                                    decimal: true),
-                            textInputAction: TextInputAction.next,
-                            onChanged: (_) => setState(() {}),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _newRemarksController,
-                      decoration: const InputDecoration(
-                        labelText: 'Remarks (optional)',
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (productId) {
+                          setState(() => _newProductId = productId);
+                          if (productId == null) return;
+                          final product = productById[productId];
+                          if (product != null) {
+                            // Pre-fill from the product master, still editable.
+                            _newRateController.text = product.price;
+                          }
+                          _qtyFocusNode.requestFocus();
+                        },
                       ),
-                      textInputAction: TextInputAction.done,
-                      onSubmitted: (_) => _addOrUpdateItem(),
-                    ),
-                    const SizedBox(height: 16),
-                    FilledButton(
-                      onPressed: _canAddItem ? _addOrUpdateItem : null,
-                      child: Text(_editingIndex != null
-                          ? 'Update item'
-                          : 'Add & continue'),
-                    ),
-                  ],
+                      const SizedBox(height: 12),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _newQtyController,
+                              decoration: InputDecoration(
+                                labelText: 'Quantity *',
+                                errorText: _qtyError,
+                              ),
+                              focusNode: _qtyFocusNode,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
+                              textInputAction: TextInputAction.next,
+                              onChanged: (_) => setState(() {}),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextField(
+                              controller: _newRateController,
+                              decoration: InputDecoration(
+                                labelText: 'Rate *',
+                                errorText: _rateError,
+                              ),
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
+                              textInputAction: TextInputAction.next,
+                              onChanged: (_) => setState(() {}),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _newRemarksController,
+                        decoration: const InputDecoration(
+                          labelText: 'Remarks (optional)',
+                        ),
+                        textInputAction: TextInputAction.done,
+                        onSubmitted: (_) => _addOrUpdateItem(),
+                      ),
+                      const SizedBox(height: 16),
+                      FilledButton(
+                        onPressed: _canAddItem ? _addOrUpdateItem : null,
+                        child: Text(
+                          _editingIndex != null
+                              ? 'Update item'
+                              : 'Add & continue',
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
+            ],
+
+            if (_items.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Order total',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Text(
+                    _total.toStringAsFixed(2),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _isValid ? _review : null,
+              icon: _isSaving
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.fact_check_outlined),
+              label: const Text('Review & create'),
             ),
           ],
-
-          if (_items.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('Order total',
-                    style: theme.textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.bold)),
-                Text(
-                  _total.toStringAsFixed(2),
-                  style: theme.textTheme.titleMedium
-                      ?.copyWith(fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-          ],
-
-          const SizedBox(height: 24),
-          FilledButton.icon(
-            onPressed: _isValid ? _review : null,
-            icon: _isSaving
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.fact_check_outlined),
-            label: const Text('Review & create'),
-          ),
-        ],
+        ),
       ),
     );
   }

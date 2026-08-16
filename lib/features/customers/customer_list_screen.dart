@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/widgets/responsive_container.dart';
 import '../../core/widgets/app_drawer.dart';
 import '../../core/widgets/empty_state.dart';
 import '../../core/widgets/loading_list_skeleton.dart';
@@ -27,9 +28,7 @@ class _CustomerListScreenState extends ConsumerState<CustomerListScreen> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(
-      () => ref.read(customersNotifierProvider.notifier).load(),
-    );
+    Future.microtask(() => ref.read(customersNotifierProvider.notifier).load());
   }
 
   @override
@@ -41,30 +40,30 @@ class _CustomerListScreenState extends ConsumerState<CustomerListScreen> {
   // ── Selection ─────────────────────────────────────────────────────────────
 
   void _exitSelection() => setState(() {
-        _selecting = false;
-        _selected.clear();
-      });
+    _selecting = false;
+    _selected.clear();
+  });
 
   void _startSelection(String id) => setState(() {
-        _selecting = true;
-        _selected.add(id);
-      });
+    _selecting = true;
+    _selected.add(id);
+  });
 
   void _toggle(String id) => setState(() {
-        if (!_selected.remove(id)) _selected.add(id);
-        if (_selected.isEmpty) _selecting = false;
-      });
+    if (!_selected.remove(id)) _selected.add(id);
+    if (_selected.isEmpty) _selecting = false;
+  });
 
   void _toggleSelectAll(List<Customer> visible) => setState(() {
-        if (_selected.length == visible.length) {
-          _selected.clear();
-          _selecting = false;
-        } else {
-          _selected
-            ..clear()
-            ..addAll(visible.map((c) => c.id));
-        }
-      });
+    if (_selected.length == visible.length) {
+      _selected.clear();
+      _selecting = false;
+    } else {
+      _selected
+        ..clear()
+        ..addAll(visible.map((c) => c.id));
+    }
+  });
 
   Future<void> _deleteSelected() async {
     if (_selected.isEmpty || _isDeleting) return;
@@ -75,16 +74,15 @@ class _CustomerListScreenState extends ConsumerState<CustomerListScreen> {
       count: ids.length,
       singular: 'this customer',
       plural: 'customers',
-      consequences: const [
-        'Customers linked to a purchase order will be kept',
-      ],
+      consequences: const ['Customers linked to a purchase order will be kept'],
     );
     if (!confirmed || !mounted) return;
 
     setState(() => _isDeleting = true);
     try {
-      final outcome =
-          await ref.read(customersNotifierProvider.notifier).deleteMany(ids);
+      final outcome = await ref
+          .read(customersNotifierProvider.notifier)
+          .deleteMany(ids);
       if (!mounted) return;
       showSnackBar(
         context,
@@ -107,10 +105,12 @@ class _CustomerListScreenState extends ConsumerState<CustomerListScreen> {
     final state = ref.watch(customersNotifierProvider);
     final q = _query.trim().toLowerCase();
     final filtered = state.customers
-        .where((c) =>
-            c.name.toLowerCase().contains(q) ||
-            c.customerCode.toLowerCase().contains(q) ||
-            c.phone.contains(q))
+        .where(
+          (c) =>
+              c.name.toLowerCase().contains(q) ||
+              c.customerCode.toLowerCase().contains(q) ||
+              c.phone.contains(q),
+        )
         .toList();
 
     return PopScope(
@@ -125,32 +125,35 @@ class _CustomerListScreenState extends ConsumerState<CustomerListScreen> {
                 totalCount: filtered.length,
                 onClose: _exitSelection,
                 onToggleSelectAll: () => _toggleSelectAll(filtered),
-                onDelete:
-                    _selected.isEmpty || _isDeleting ? null : _deleteSelected,
+                onDelete: _selected.isEmpty || _isDeleting
+                    ? null
+                    : _deleteSelected,
               )
             : AppBar(title: const Text('Customers')),
         drawer: _selecting ? null : const AppDrawer(currentPath: '/customers'),
-        body: Column(
-          children: [
-            if (_isDeleting) const LinearProgressIndicator(),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: TextField(
-                controller: _searchController,
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search),
-                  hintText: 'Search by name, code or phone',
+        body: ResponsiveContainer(
+          child: Column(
+            children: [
+              if (_isDeleting) const LinearProgressIndicator(),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: TextField(
+                  controller: _searchController,
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.search),
+                    hintText: 'Search by name, code or phone',
+                  ),
+                  onChanged: (v) => setState(() => _query = v),
                 ),
-                onChanged: (v) => setState(() => _query = v),
               ),
-            ),
-            Expanded(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 300),
-                child: _buildBody(state, filtered, theme),
+              Expanded(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 300),
+                  child: _buildBody(state, filtered, theme),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
         floatingActionButton: _selecting
             ? null

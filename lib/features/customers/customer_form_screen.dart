@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/widgets/responsive_container.dart';
 import '../../core/widgets/snack_bar_helper.dart';
 import '../../core/widgets/conflict_dialog.dart';
 import 'customers_notifier.dart';
@@ -39,7 +40,9 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
   void initState() {
     super.initState();
     if (widget.id != null) {
-      _existing = ref.read(customersNotifierProvider.notifier).findById(widget.id!);
+      _existing = ref
+          .read(customersNotifierProvider.notifier)
+          .findById(widget.id!);
       if (_existing != null) {
         _fill(_existing!);
       } else {
@@ -47,8 +50,9 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
         Future.microtask(() async {
           await ref.read(customersNotifierProvider.notifier).load();
           if (!mounted) return;
-          final found =
-              ref.read(customersNotifierProvider.notifier).findById(widget.id!);
+          final found = ref
+              .read(customersNotifierProvider.notifier)
+              .findById(widget.id!);
           if (found != null) setState(() => _fill(found));
         });
       }
@@ -128,7 +132,9 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
       _duplicateError == null;
 
   void _checkDuplicate() {
-    final existing = ref.read(customersNotifierProvider.notifier).findDuplicate(
+    final existing = ref
+        .read(customersNotifierProvider.notifier)
+        .findDuplicate(
           _nameController.text,
           _phoneController.text,
           excludeId: widget.id,
@@ -151,8 +157,10 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
       excludeId: widget.id,
     );
     if (dup != null) {
-      setState(() => _duplicateError =
-          'A customer with this name and phone number already exists.');
+      setState(
+        () => _duplicateError =
+            'A customer with this name and phone number already exists.',
+      );
       return;
     }
 
@@ -161,20 +169,20 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
       final now = DateTime.now().toIso8601String();
       final base = (_existing ?? Customer(id: '', name: '', createdAt: now))
           .copyWith(
-        name: _nameController.text.trim(),
-        phone: _phoneController.text.trim(),
-        email: _emailController.text.trim(),
-        street: _streetController.text.trim(),
-        area: _areaController.text.trim(),
-        cityDistrict: _cityController.text.trim(),
-        state: _stateController.text.trim(),
-        country: _countryController.text.trim(),
-        pincode: _pincodeController.text.trim(),
-        gstNumber: _gstController.text.trim(),
-        tinNumber: _tinController.text.trim(),
-        cstNumber: _cstController.text.trim(),
-        updatedAt: now,
-      );
+            name: _nameController.text.trim(),
+            phone: _phoneController.text.trim(),
+            email: _emailController.text.trim(),
+            street: _streetController.text.trim(),
+            area: _areaController.text.trim(),
+            cityDistrict: _cityController.text.trim(),
+            state: _stateController.text.trim(),
+            country: _countryController.text.trim(),
+            pincode: _pincodeController.text.trim(),
+            gstNumber: _gstController.text.trim(),
+            tinNumber: _tinController.text.trim(),
+            cstNumber: _cstController.text.trim(),
+            updatedAt: now,
+          );
 
       if (_existing != null) {
         await notifier.update(base);
@@ -205,133 +213,135 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
     final isEditing = _existing != null;
     return Scaffold(
       appBar: AppBar(title: Text(isEditing ? 'Edit Customer' : 'Add Customer')),
-      body: Form(
-        key: _formKey,
-        autovalidateMode: AutovalidateMode.onUserInteraction,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            TextFormField(
-              controller: _nameController,
-              decoration: const InputDecoration(labelText: 'Name *'),
-              validator: _validateName,
-              textInputAction: TextInputAction.next,
-              onChanged: (_) {
-                setState(() {});
-                _checkDuplicate();
-              },
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _phoneController,
-              decoration: InputDecoration(
-                labelText: 'Phone (10 digits)',
-                errorText: _duplicateError,
+      body: ResponsiveContainer(
+        child: Form(
+          key: _formKey,
+          autovalidateMode: AutovalidateMode.onUserInteraction,
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              TextFormField(
+                controller: _nameController,
+                decoration: const InputDecoration(labelText: 'Name *'),
+                validator: _validateName,
+                textInputAction: TextInputAction.next,
+                onChanged: (_) {
+                  setState(() {});
+                  _checkDuplicate();
+                },
               ),
-              validator: _validatePhone,
-              keyboardType: TextInputType.phone,
-              textInputAction: TextInputAction.next,
-              onChanged: (_) {
-                setState(() {});
-                _checkDuplicate();
-              },
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _emailController,
-              decoration: const InputDecoration(labelText: 'Email'),
-              validator: _validateEmail,
-              keyboardType: TextInputType.emailAddress,
-              textInputAction: TextInputAction.next,
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 24),
-            _sectionLabel(context, 'Address'),
-            TextFormField(
-              controller: _streetController,
-              decoration: const InputDecoration(labelText: 'Street'),
-              textInputAction: TextInputAction.next,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _areaController,
-              decoration: const InputDecoration(labelText: 'Area / Locality'),
-              textInputAction: TextInputAction.next,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _cityController,
-              decoration: const InputDecoration(labelText: 'City / District'),
-              textInputAction: TextInputAction.next,
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: _stateController,
-                    decoration: const InputDecoration(labelText: 'State'),
-                    textInputAction: TextInputAction.next,
-                  ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _phoneController,
+                decoration: InputDecoration(
+                  labelText: 'Phone (10 digits)',
+                  errorText: _duplicateError,
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextFormField(
-                    controller: _countryController,
-                    decoration: const InputDecoration(labelText: 'Country'),
-                    textInputAction: TextInputAction.next,
+                validator: _validatePhone,
+                keyboardType: TextInputType.phone,
+                textInputAction: TextInputAction.next,
+                onChanged: (_) {
+                  setState(() {});
+                  _checkDuplicate();
+                },
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _emailController,
+                decoration: const InputDecoration(labelText: 'Email'),
+                validator: _validateEmail,
+                keyboardType: TextInputType.emailAddress,
+                textInputAction: TextInputAction.next,
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 24),
+              _sectionLabel(context, 'Address'),
+              TextFormField(
+                controller: _streetController,
+                decoration: const InputDecoration(labelText: 'Street'),
+                textInputAction: TextInputAction.next,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _areaController,
+                decoration: const InputDecoration(labelText: 'Area / Locality'),
+                textInputAction: TextInputAction.next,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _cityController,
+                decoration: const InputDecoration(labelText: 'City / District'),
+                textInputAction: TextInputAction.next,
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _stateController,
+                      decoration: const InputDecoration(labelText: 'State'),
+                      textInputAction: TextInputAction.next,
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _pincodeController,
-              decoration: const InputDecoration(labelText: 'Pincode'),
-              validator: _validatePincode,
-              keyboardType: TextInputType.number,
-              textInputAction: TextInputAction.next,
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 24),
-            _sectionLabel(context, 'Tax Info'),
-            TextFormField(
-              controller: _gstController,
-              decoration: const InputDecoration(labelText: 'GST Number'),
-              textInputAction: TextInputAction.next,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _tinController,
-              decoration: const InputDecoration(labelText: 'TIN Number'),
-              textInputAction: TextInputAction.next,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _cstController,
-              decoration: const InputDecoration(labelText: 'CST Number'),
-              textInputAction: TextInputAction.done,
-              onFieldSubmitted: (_) => _submit(),
-            ),
-            const SizedBox(height: 24),
-            FilledButton(
-              onPressed: _isValid && !_isSaving ? _submit : null,
-              child: _isSaving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : Text(isEditing ? 'Save changes' : 'Create customer'),
-            ),
-          ],
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _countryController,
+                      decoration: const InputDecoration(labelText: 'Country'),
+                      textInputAction: TextInputAction.next,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _pincodeController,
+                decoration: const InputDecoration(labelText: 'Pincode'),
+                validator: _validatePincode,
+                keyboardType: TextInputType.number,
+                textInputAction: TextInputAction.next,
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 24),
+              _sectionLabel(context, 'Tax Info'),
+              TextFormField(
+                controller: _gstController,
+                decoration: const InputDecoration(labelText: 'GST Number'),
+                textInputAction: TextInputAction.next,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _tinController,
+                decoration: const InputDecoration(labelText: 'TIN Number'),
+                textInputAction: TextInputAction.next,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _cstController,
+                decoration: const InputDecoration(labelText: 'CST Number'),
+                textInputAction: TextInputAction.done,
+                onFieldSubmitted: (_) => _submit(),
+              ),
+              const SizedBox(height: 24),
+              FilledButton(
+                onPressed: _isValid && !_isSaving ? _submit : null,
+                child: _isSaving
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(isEditing ? 'Save changes' : 'Create customer'),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
   Widget _sectionLabel(BuildContext context, String text) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Text(text, style: Theme.of(context).textTheme.titleSmall),
-      );
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Text(text, style: Theme.of(context).textTheme.titleSmall),
+  );
 }

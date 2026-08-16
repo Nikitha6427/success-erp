@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import '../../core/widgets/responsive_container.dart';
 import '../../core/widgets/document_copies_sheet.dart';
 import '../../core/widgets/empty_state.dart';
 import '../../core/widgets/selection_app_bar.dart';
@@ -62,7 +63,9 @@ class _InvoiceDetailScreenState extends ConsumerState<InvoiceDetailScreen> {
       var dnNumbers = <String>[];
       if (invoice != null && invoice.poId.isNotEmpty) {
         po = await ref.read(poNotifierProvider.notifier).findById(invoice.poId);
-        final dns = await ref.read(dnRepositoryProvider).loadByPoId(invoice.poId);
+        final dns = await ref
+            .read(dnRepositoryProvider)
+            .loadByPoId(invoice.poId);
         final dnItems = await ref.read(dnItemRepositoryProvider).loadAll();
         final poItemIds = items.map((i) => i.poItemId).toSet();
         final linkedDnIds = dnItems
@@ -136,17 +139,15 @@ class _InvoiceDetailScreenState extends ConsumerState<InvoiceDetailScreen> {
             onPressed: _busy ? null : _openCopies,
           ),
           IconButton(
-            icon: Icon(invoice.isPaid
-                ? Icons.undo
-                : Icons.check_circle_outline),
+            icon: Icon(
+              invoice.isPaid ? Icons.undo : Icons.check_circle_outline,
+            ),
             tooltip: invoice.isPaid ? 'Revert to Pending' : 'Mark as Paid',
             onPressed: _busy
                 ? null
                 : () => _changeStatus(
-                      invoice.isPaid
-                          ? Invoice.statusPending
-                          : Invoice.statusPaid,
-                    ),
+                    invoice.isPaid ? Invoice.statusPending : Invoice.statusPaid,
+                  ),
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline),
@@ -155,80 +156,98 @@ class _InvoiceDetailScreenState extends ConsumerState<InvoiceDetailScreen> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        children: [
-          Text(invoice.invoiceNumber, style: theme.textTheme.headlineSmall),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              const Text('Status: '),
-              StatusPill(status: invoice.status),
-            ],
-          ),
-          const SizedBox(height: 8),
-          _kv('Invoice date', _formatDate(invoice.invoiceDate)),
-          _kv('Order', _po?.poNumber ?? '—'),
-          if (_dnNumbers.isNotEmpty) _kv('Delivery notes', _dnNumbers.join(', ')),
-          _kv('Transportation mode',
-              invoice.transportMode.isEmpty ? '—' : invoice.transportMode),
-          _kv('Vehicle number',
-              invoice.vehicleNumber.isEmpty ? '—' : invoice.vehicleNumber),
+      body: ResponsiveContainer(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          children: [
+            Text(invoice.invoiceNumber, style: theme.textTheme.headlineSmall),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Text('Status: '),
+                StatusPill(status: invoice.status),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _kv('Invoice date', _formatDate(invoice.invoiceDate)),
+            _kv('Order', _po?.poNumber ?? '—'),
+            if (_dnNumbers.isNotEmpty)
+              _kv('Delivery notes', _dnNumbers.join(', ')),
+            _kv(
+              'Transportation mode',
+              invoice.transportMode.isEmpty ? '—' : invoice.transportMode,
+            ),
+            _kv(
+              'Vehicle number',
+              invoice.vehicleNumber.isEmpty ? '—' : invoice.vehicleNumber,
+            ),
 
-          const SizedBox(height: 24),
-          Text('Line items', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          if (_items.isEmpty)
-            const EmptyState(icon: Icons.receipt_outlined, message: 'No items')
-          else
-            ..._items.map(
-              (item) => Card(
-                child: ListTile(
-                  title: Text(item.description),
-                  subtitle: Text(
-                    item.isFlatCharge
-                        ? 'Flat charge'
-                        : 'Qty ${item.quantity} × ${item.rate}'
-                            '${item.hsnSac.isEmpty ? '' : '  •  HSN/SAC ${item.hsnSac}'}'
-                            '${item.remarks.isEmpty ? '' : '\n${item.remarks}'}',
-                  ),
-                  isThreeLine: !item.isFlatCharge && item.remarks.isNotEmpty,
-                  trailing: Text(
-                    item.amount,
-                    style: theme.textTheme.bodyMedium
-                        ?.copyWith(fontWeight: FontWeight.bold),
+            const SizedBox(height: 24),
+            Text('Line items', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            if (_items.isEmpty)
+              const EmptyState(
+                icon: Icons.receipt_outlined,
+                message: 'No items',
+              )
+            else
+              ..._items.map(
+                (item) => Card(
+                  child: ListTile(
+                    title: Text(item.description),
+                    subtitle: Text(
+                      item.isFlatCharge
+                          ? 'Flat charge'
+                          : 'Qty ${item.quantity} × ${item.rate}'
+                                '${item.hsnSac.isEmpty ? '' : '  •  HSN/SAC ${item.hsnSac}'}'
+                                '${item.remarks.isEmpty ? '' : '\n${item.remarks}'}',
+                    ),
+                    isThreeLine: !item.isFlatCharge && item.remarks.isNotEmpty,
+                    trailing: Text(
+                      item.amount,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
 
-          const SizedBox(height: 16),
-          const Divider(),
-          _totalRow('Subtotal',
-              money.format(double.tryParse(invoice.subtotalAmount) ?? 0)),
-          _totalRow('CGST (${invoice.cgstPercent}%)',
-              money.format(double.tryParse(invoice.cgstAmount) ?? 0)),
-          _totalRow('SGST (${invoice.sgstPercent}%)',
-              money.format(double.tryParse(invoice.sgstAmount) ?? 0)),
-          const Divider(),
-          _totalRow('Total', money.format(invoice.total), bold: true),
-          if (invoice.amountInWords.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-              invoice.amountInWords,
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(fontStyle: FontStyle.italic),
+            const SizedBox(height: 16),
+            const Divider(),
+            _totalRow(
+              'Subtotal',
+              money.format(double.tryParse(invoice.subtotalAmount) ?? 0),
             ),
+            _totalRow(
+              'CGST (${invoice.cgstPercent}%)',
+              money.format(double.tryParse(invoice.cgstAmount) ?? 0),
+            ),
+            _totalRow(
+              'SGST (${invoice.sgstPercent}%)',
+              money.format(double.tryParse(invoice.sgstAmount) ?? 0),
+            ),
+            const Divider(),
+            _totalRow('Total', money.format(invoice.total), bold: true),
+            if (invoice.amountInWords.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                invoice.amountInWords,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
 
   Widget _kv(String label, String value) => Padding(
-        padding: const EdgeInsets.only(bottom: 2),
-        child: Text('$label: $value'),
-      );
+    padding: const EdgeInsets.only(bottom: 2),
+    child: Text('$label: $value'),
+  );
 
   Widget _totalRow(String label, String value, {bool bold = false}) {
     final style = TextStyle(
@@ -239,7 +258,10 @@ class _InvoiceDetailScreenState extends ConsumerState<InvoiceDetailScreen> {
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [Text(label, style: style), Text(value, style: style)],
+        children: [
+          Text(label, style: style),
+          Text(value, style: style),
+        ],
       ),
     );
   }
